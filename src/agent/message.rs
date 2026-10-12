@@ -1,25 +1,40 @@
 //! User-message display normalization shared by live and restored messages.
 
 const ATTACHED_FILES_HEADER: &str = "# Files mentioned by the user:\n\n";
-const ATTACHED_FILES_REQUEST_MARKER: &str = "\n## My request:\n";
+/// Both spellings the clients write before the text the user actually typed.
+const REQUEST_MARKERS: [&str; 2] = ["## My request:", "## My request for Codex:"];
 
 /// Converts the app-server's user-message text into the literal text shown by
-/// the desktop client. The protocol preserves a transport line ending and, for
-/// attachments, may wrap the visible request in an instruction envelope. The
-/// desktop renderer removes both before laying out the message bubble.
+/// the desktop client. The protocol preserves a transport line ending and may
+/// wrap the visible request in an instruction envelope: attached files, the
+/// in-app browser's ambient UI state, IDE context and the like all precede a
+/// `## My request:` heading. Like the ChatGPT App, the desktop renderer shows
+/// only what follows the last such heading, whatever the envelope contains.
 pub fn normalize_user_message_for_display(source: &str) -> String {
     let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
-    let envelope_candidate = normalized.trim_start_matches('\n');
-    let visible = if envelope_candidate.starts_with(ATTACHED_FILES_HEADER) {
-        envelope_candidate
-            .find(ATTACHED_FILES_REQUEST_MARKER)
-            .map(|marker| &envelope_candidate[marker + ATTACHED_FILES_REQUEST_MARKER.len()..])
-            .unwrap_or(normalized.as_str())
-    } else {
-        normalized.as_str()
+    let visible = match request_after_last_marker(&normalized) {
+        Some(request) => request.trim(),
+        None => normalized.trim_end_matches('\n'),
     };
 
-    unescape_commonmark_punctuation(visible.trim_end_matches('\n'))
+    unescape_commonmark_punctuation(visible)
+}
+
+/// The text after the last request heading that starts a line. A heading
+/// quoted in the middle of a line is part of what the user wrote.
+fn request_after_last_marker(source: &str) -> Option<&str> {
+    let mut line_start = 0;
+    let mut request_start = None;
+    for line in source.split_inclusive('\n') {
+        if let Some(rest) = REQUEST_MARKERS
+            .iter()
+            .find_map(|marker| line.strip_prefix(marker))
+        {
+            request_start = Some(line_start + line.len() - rest.len());
+        }
+        line_start += line.len();
+    }
+    request_start.map(|start| &source[start..])
 }
 
 fn unescape_commonmark_punctuation(source: &str) -> String {
@@ -106,6 +121,69 @@ mod tests {
         assert_eq!(
             normalize_user_message_for_display(source),
             "附件 + **Markdown** + 中English"
+        );
+    }
+
+    #[test]
+    fn user_message_display_drops_the_in_app_browser_ambient_context() {
+        // A mid-turn prompt as the ChatGPT App persists it: the ambient UI
+        // state of the in-app browser precedes the heading.
+        let source = concat!(
+            "<in-app-browser-context source=\"ambient-ui-state\">\n",
+            "This block is automatically supplied ambient UI state, not part of the user's request. ",
+            "Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.\n",
+            "# In app browser:\n",
+            "- The user has the in-app browser open with 2 tabs.\n",
+            "- Current URLs:\n",
+            "  - https://example.com/a\n",
+            "  - https://example.com/b\n",
+            "</in-app-browser-context>\n",
+            "\n## My request:\n",
+            "issue中可以上传图片，这样更加明确\n"
+        );
+        assert_eq!(
+            normalize_user_message_for_display(source),
+            "issue中可以上传图片，这样更加明确"
+        );
+    }
+
+    #[test]
+    fn user_message_display_drops_every_section_before_the_request() {
+        let source = concat!(
+            "# Files mentioned by the user:\n\n",
+            "## capture.png: /tmp/capture.png\n\n",
+            "<in-app-browser-context source=\"ambient-ui-state\">\n",
+            "# In app browser:\n",
+            "- The user has the in-app browser open.\n",
+            "- Current URL: https://example.com\n",
+            "</in-app-browser-context>\n\n",
+            "## My request:\n",
+            "第一行\n\n第三行\n"
+        );
+        assert_eq!(
+            normalize_user_message_for_display(source),
+            "第一行\n\n第三行"
+        );
+        assert_eq!(
+            normalize_user_message_for_display(
+                "# Context from my IDE setup:\n\n## My request for Codex:\nfix it\n"
+            ),
+            "fix it"
+        );
+    }
+
+    #[test]
+    fn user_message_display_keeps_only_the_text_after_the_last_request_heading() {
+        let source = "## My request:\nfirst\n\n## My request:\nsecond\n";
+        assert_eq!(normalize_user_message_for_display(source), "second");
+    }
+
+    #[test]
+    fn user_message_display_keeps_request_headings_quoted_inside_a_line() {
+        let source = "why does the app show ## My request: in my bubble?\n";
+        assert_eq!(
+            normalize_user_message_for_display(source),
+            source.trim_end()
         );
     }
 
