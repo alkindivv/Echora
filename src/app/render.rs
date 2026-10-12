@@ -676,8 +676,7 @@ impl Render for ChatApp {
                                                     ).into_any_element()
                                                 },
                                             )
-                                            .when_some(summary_island, |main, island| main.child(island))
-                                            .when_some(toasts, |main, toasts| main.child(toasts)),
+                                            .when_some(summary_island, |main, island| main.child(island)),
                                     ))
                                     .when(self.right_panel.open, |row| {
                                         row.child(self.right_panel(
@@ -694,6 +693,14 @@ impl Render for ChatApp {
             .when_some(review_overlay,|shell,overlay|shell.child(overlay))
             .when_some(side_chat_overlay,|shell,overlay|shell.child(overlay))
             .when_some(composer_overlay,|shell,overlay|shell.child(overlay))
+            // Above the thread header and its fade, which would cover a toast
+            // laid out inside the chat column.
+            .when_some(
+                toasts.filter(|_| {
+                    !self.showing_settings && !self.showing_pull_requests && !review_fullscreen
+                }),
+                |shell, toasts| shell.child(toasts),
+            )
             .when(self.permission_confirmation_open, |shell| {
                 shell.child(
                     div()

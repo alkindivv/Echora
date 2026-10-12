@@ -110,6 +110,8 @@ struct RecordingBackend {
     runs: Mutex<Vec<async_channel::Sender<AgentEvent>>>,
     steers: Mutex<Vec<crate::agent::AgentSteerRequest>>,
     steer_results: Mutex<Vec<async_channel::Sender<Result<(), String>>>>,
+    /// When set, reading a thread's settings fails with this error.
+    thread_settings_error: Mutex<Option<String>>,
 }
 
 impl RecordingBackend {
@@ -122,6 +124,7 @@ impl RecordingBackend {
             runs: Mutex::new(Vec::new()),
             steers: Mutex::new(Vec::new()),
             steer_results: Mutex::new(Vec::new()),
+            thread_settings_error: Mutex::new(None),
         })
     }
 
@@ -151,6 +154,17 @@ impl AgentBackend for RecordingBackend {
         _request: crate::agent::AgentThreadPermissionUpdate,
     ) -> async_channel::Receiver<Result<crate::agent::AgentThreadPermissionResult, String>> {
         async_channel::bounded(1).1
+    }
+
+    fn load_thread_settings(
+        &self,
+        _thread_id: String,
+        _generation: u64,
+    ) -> async_channel::Receiver<Result<crate::agent::AgentThreadSettingsSnapshot, String>> {
+        let (sender, receiver) = async_channel::bounded(1);
+        let error = self.thread_settings_error.lock().unwrap().clone();
+        let _ = sender.try_send(Err(error.unwrap_or_else(|| "settings unavailable".into())));
+        receiver
     }
 
     fn steer_turn(
@@ -2730,6 +2744,84 @@ fn failed_permission_switch_keeps_effective_permissions_and_shows_error() {
                 .is_some_and(|error| error.contains("RPC -32602"))
             && matches!(composer.conversation.activities.last(), Some(ConversationActivity::Error { message }) if message.contains("RPC -32602"))
     }));
+}
+
+/// A thread recorded under a model provider that `config.toml` no longer defines,
+/// as the adapter words the failed `thread/resume`.
+const MISSING_PROVIDER_ERROR: &str = concat!(
+    "thread/resume `thread-1` 失败: Codex JSON-RPC `thread/resume` 请求 248 失败：",
+    r#"{"code":-32600,"message":"failed to load configuration: Model provider `aipixel` not found"}"#,
+);
+
+fn composer_reading_thread_settings_failing_with(
+    app: &mut TestApp,
+    error: &str,
+) -> gpui::Entity<ComposerView> {
+    let backend = RecordingBackend::new();
+    *backend.thread_settings_error.lock().unwrap() = Some(error.to_owned());
+    let source: Arc<dyn AgentBackend> = backend;
+    let composer = app.new_entity(|cx| ComposerView::new_with_backend(ThemeMode::Dark, source, cx));
+    app.update_entity(&composer, |composer, cx| {
+        seed_permission_catalog(composer);
+        composer.conversation.thread_id = Some("thread-1".into());
+        composer.load_effective_permissions(cx);
+    });
+    app.run_until_parked();
+    composer
+}
+
+#[test]
+fn a_thread_that_cannot_resume_for_its_configuration_shows_a_toast_not_a_permission_warning() {
+    let mut app = TestApp::new();
+    let composer = composer_reading_thread_settings_failing_with(&mut app, MISSING_PROVIDER_ERROR);
+    app.read_entity(&composer, |composer, _| {
+        assert_eq!(
+            composer.conversation.permission_error, None,
+            "no protocol dump above the input"
+        );
+        let [toast] = composer.toasts() else {
+            panic!("expected one toast, got {:?}", composer.toasts());
+        };
+        assert_eq!(toast.kind, super::ToastKind::Danger);
+        assert!(toast.text.contains("config.toml"), "{}", toast.text);
+        assert!(
+            toast.text.contains("Model provider `aipixel` not found"),
+            "{}",
+            toast.text
+        );
+        assert!(
+            !toast.text.contains("JSON-RPC") && !toast.text.contains("-32600"),
+            "{}",
+            toast.text
+        );
+    });
+}
+
+#[test]
+fn reading_a_thread_that_cannot_resume_again_replaces_its_toast() {
+    let mut app = TestApp::new();
+    let composer = composer_reading_thread_settings_failing_with(&mut app, MISSING_PROVIDER_ERROR);
+    app.update_entity(&composer, |composer, cx| {
+        composer.load_effective_permissions(cx);
+    });
+    app.run_until_parked();
+    assert_eq!(app.read_entity(&composer, |c, _| c.toasts().len()), 1);
+}
+
+#[test]
+fn other_effective_permission_read_failures_keep_the_permission_warning() {
+    let mut app = TestApp::new();
+    let composer = composer_reading_thread_settings_failing_with(&mut app, "connection reset");
+    app.read_entity(&composer, |composer, _| {
+        assert!(
+            composer
+                .conversation
+                .permission_error
+                .as_deref()
+                .is_some_and(|error| error.contains("connection reset"))
+        );
+        assert!(composer.toasts().is_empty());
+    });
 }
 
 #[test]

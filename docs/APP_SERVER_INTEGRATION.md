@@ -414,7 +414,7 @@ Hook 字段范围：eventName 支持 preToolUse、permissionRequest、postToolUs
 | `thread/realtime/listVoices` | 实验 | 未接入 | — | — |
 | `thread/realtime/start` | 实验 | 未接入 | — | — |
 | `thread/realtime/stop` | 实验 | 未接入 | — | — |
-| `thread/resume` | 默认 | 已接入 | threadId、excludeTurns=true；当前 generation 未加载时执行一次，返回 id 必须匹配；失败不回退为新建。 | `manager/turn` |
+| `thread/resume` | 默认 | 已接入 | threadId、excludeTurns=true；当前 generation 未加载时执行一次，返回 id 必须匹配；失败不回退为新建。线程记录的 model provider 在当前 `config.toml` 中已不存在时，服务端以 -32600 `failed to load configuration: Model provider \`…\` not found` 拒绝（ChatGPT 应用的同一请求得到相同错误）；读取有效权限时遇到此类配置加载失败，不在输入框上方显示 JSON-RPC 原文，而是与参考一致显示可关闭的“无法加载 config.toml，因此无法恢复此对话”提示条，历史仍可阅读。 | `manager/turn`、`agent/config_error`、`composer/permissions` |
 | `thread/revert` | 默认 | 已接入 | 改写最新用户消息时按 beforeTurnId 传该轮 id：把持久化历史替换为该轮之前的前缀，随后仍走 thread/read 与分页路径重载；响应是历史权威来源，校验返回 thread 与请求 threadId 一致并保留可选 turnsBackwardsCursor／itemsBackwardsCursor，不回退本地文件改动。先到的 `thread/reverted` 记为该请求的确认。 | `manager/revert`、`components/composer` |
 | `thread/search` | 实验 | 已接入 | 非空 searchTerm、archived、分页和排序；返回 thread 与 snippet。历史会话搜索弹窗用它检索会话；空查询改用 `threadSection/list` 的置顶分区与 `thread/list`（recency 倒序）拼出前九行。参考实现的弹窗还会合并 ChatGPT 云端会话，app-server 无对应数据。 | `manager/workspace` |
 | `thread/searchOccurrences` | 实验 | 已接入 | threadId/searchTerm（去首尾空白）/limit=250/cursor；UTF-16 snippetMatchRange 转字节并拒绝越界、倒序或切开代理对；游标重复即停止；`-32601`（临时线程）回退本地已加载消息查找；聊天内 ⌘F 查找栏逐项定位与高亮。 | `manager/search`、`conversation/find`、`home/find` |

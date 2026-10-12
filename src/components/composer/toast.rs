@@ -1,7 +1,8 @@
 //! Short confirmations and errors over the conversation, as the reference's
 //! success and danger toasts:
 //! top-centre, 8px from the top, at most three stacked 8px apart, and gone
-//! after five seconds.
+//! after five seconds. A sticky toast, which the reference uses for an error
+//! the user has to act on, stays until it is closed.
 
 use std::time::Duration;
 
@@ -11,6 +12,9 @@ use super::ComposerView;
 use crate::{components::icons::icon, theme::ThemeMode};
 
 pub(crate) const TOAST_DURATION: Duration = Duration::from_secs(5);
+/// A conversation's toasts sit just under its 46px header row, as the
+/// reference's toaster does (measured at y=48 on 26.930), centred on the window.
+const CONVERSATION_TOAST_TOP: f32 = 48.0;
 pub(crate) const VISIBLE_TOASTS: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +30,9 @@ pub(crate) struct ComposerToast {
     pub(crate) text: String,
     /// The label of the toast's action button (the reference's "Undo").
     pub(crate) action: Option<String>,
+    /// Names a sticky toast, so that showing the same error again replaces it
+    /// instead of stacking a copy.
+    pub(crate) key: Option<String>,
 }
 
 /// What a toast's action button does; run once, then the toast closes.
@@ -34,6 +41,21 @@ pub(crate) type ToastAction = std::rc::Rc<dyn Fn(&mut gpui::Window, &mut gpui::A
 impl ComposerView {
     pub(super) fn show_toast(&mut self, kind: ToastKind, text: String, cx: &mut Context<Self>) {
         self.push_toast(kind, text, None, cx);
+    }
+
+    /// A danger toast that stays until the user closes it. A toast with the
+    /// same `key` is replaced.
+    pub(super) fn show_sticky_toast(
+        &mut self,
+        key: String,
+        kind: ToastKind,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.toasts
+            .retain(|toast| toast.key.as_deref() != Some(key.as_str()));
+        self.insert_toast(kind, text, None, Some(key));
+        cx.notify();
     }
 
     /// A toast shown for another surface of this conversation (the summary
@@ -55,6 +77,24 @@ impl ComposerView {
         action: Option<(String, ToastAction)>,
         cx: &mut Context<Self>,
     ) {
+        let id = self.insert_toast(kind, text, action, None);
+        let timer = cx.background_executor().timer(TOAST_DURATION);
+        cx.spawn(async move |this, cx| {
+            timer.await;
+            let _ = this.update(cx, |this, cx| this.dismiss_toast(id, cx));
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Adds the toast, dropping the oldest beyond the visible stack.
+    fn insert_toast(
+        &mut self,
+        kind: ToastKind,
+        text: String,
+        action: Option<(String, ToastAction)>,
+        key: Option<String>,
+    ) -> u64 {
         self.next_toast_id += 1;
         let id = self.next_toast_id;
         let label = action.as_ref().map(|(label, _)| label.clone());
@@ -66,16 +106,13 @@ impl ComposerView {
             kind,
             text,
             action: label,
+            key,
         });
         let overflow = self.toasts.len().saturating_sub(VISIBLE_TOASTS);
-        self.toasts.drain(..overflow);
-        let timer = cx.background_executor().timer(TOAST_DURATION);
-        cx.spawn(async move |this, cx| {
-            timer.await;
-            let _ = this.update(cx, |this, cx| this.dismiss_toast(id, cx));
-        })
-        .detach();
-        cx.notify();
+        for dropped in self.toasts.drain(..overflow) {
+            self.toast_actions.remove(&dropped.id);
+        }
+        id
     }
 
     fn dismiss_toast(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -121,7 +158,7 @@ impl ComposerView {
                 }
             })
             .collect();
-        Some(toast_stack(toasts))
+        Some(toast_stack_at(CONVERSATION_TOAST_TOP, toasts))
     }
 }
 
@@ -253,9 +290,17 @@ fn toast_action_button(
 
 /// Top-centre, 8px from the top, toasts stacked 8px apart.
 pub(crate) fn toast_stack(toasts: impl IntoIterator<Item = impl IntoElement>) -> AnyElement {
+    toast_stack_at(8., toasts)
+}
+
+/// Top-centre, `top` px from the top, toasts stacked 8px apart.
+pub(crate) fn toast_stack_at(
+    top: f32,
+    toasts: impl IntoIterator<Item = impl IntoElement>,
+) -> AnyElement {
     div()
         .absolute()
-        .top(px(8.))
+        .top(px(top))
         .left_0()
         .right_0()
         .px(px(8.))

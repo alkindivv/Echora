@@ -11,6 +11,7 @@ mod catalog;
 mod codex;
 mod collaboration;
 mod config;
+mod config_error;
 mod events;
 mod features;
 mod file_search;
@@ -98,6 +99,7 @@ pub use config::{
     AgentConfigLayer, AgentConfigReceipt, AgentConfigRequirements, AgentConfigSaveResult,
     AgentConfigSnapshot, AgentConfigSource, AgentConfigWrite, config_value, model_provider_name,
 };
+pub use config_error::{ConfigLoadFailure, config_load_failure};
 pub use events::{AgentConnectionEvent, AgentEvent};
 pub use features::{
     AgentExperimentalFeature, AgentExperimentalFeatureStage, AgentExperimentalFeatures,

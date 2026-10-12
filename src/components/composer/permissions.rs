@@ -4,13 +4,26 @@ use gpui::{
     BoxShadow, Context, Div, KeyDownEvent, SharedString, Window, div, hsla, prelude::*, px, rgba,
 };
 
-use super::{ComposerView, ConversationChanged, PermissionMode, RequestFullAccessConfirmation};
+use super::{
+    ComposerView, ConversationChanged, PermissionMode, RequestFullAccessConfirmation, ToastKind,
+};
 use crate::{
     agent::AgentEvent,
     components::icons::icon,
     conversation::ConversationActivity,
     theme::{Theme, ThemeMode, ui_font},
 };
+
+/// The reference's message when a thread cannot be resumed because the
+/// configuration does not load: what happened, what to fix, and what to do next.
+fn config_load_toast_text(failure: &crate::agent::ConfigLoadFailure) -> String {
+    let location = failure.location();
+    let detail = &failure.detail;
+    crate::i18n::format!(
+        "Echora 无法加载 config.toml，因此无法恢复此对话。\n请修复 {location}：{detail}。保存文件后，请重新打开此对话。" =>
+        "Echora can't load config.toml, so this thread can't resume.\nFix {location}: {detail}. After saving the file, reopen the thread."
+    )
+}
 
 impl ComposerView {
     pub(crate) fn refresh_draft_defaults(&mut self, cx: &mut Context<Self>) {
@@ -157,8 +170,21 @@ impl ComposerView {
                             Ok(Err(error)) => error,
                             _ => crate::i18n::text("线程设置连接在返回前关闭").into(),
                         };
-                        this.conversation.permission_error =
-                            Some(crate::i18n::format!("无法读取当前有效权限：{message}" => "Could not read effective permissions: {message}"));
+                        if let Some(failure) = crate::agent::config_load_failure(&message) {
+                            // The thread cannot be resumed until the user fixes
+                            // the configuration; say so once, as a toast, not as a
+                            // protocol dump above the input.
+                            this.conversation.permission_error = None;
+                            this.show_sticky_toast(
+                                format!("resume-config-error-{thread_id}"),
+                                ToastKind::Danger,
+                                config_load_toast_text(&failure),
+                                cx,
+                            );
+                        } else {
+                            this.conversation.permission_error =
+                                Some(crate::i18n::format!("无法读取当前有效权限：{message}" => "Could not read effective permissions: {message}"));
+                        }
                         cx.notify();
                     }
                 }
