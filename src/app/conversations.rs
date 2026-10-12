@@ -30,16 +30,16 @@ impl ChatApp {
         self.sync_project_labels(&self.workspace_store.snapshot().projects, cx);
         self.deactivate_review(cx);
         self.deactivate_side_chat(cx);
+        // The right panel belongs to its chat: the one the window leaves keeps
+        // its state, and the one it shows has its own. Behind the Pull
+        // Requests page the panel is parked and that page's exit restores it.
+        if !self.right_panel_parked {
+            self.remember_right_panel();
+        }
         self.active_conversation = key;
         self.update_chat_search_roots(cx);
-        // Each chat has its own tabs: an open panel shows the chat's
-        // selected tab, or a New tab for a chat without any.
-        if self.right_panel.open {
-            self.reconcile_panel_tabs(None, cx);
-            match self.active_panel_tab() {
-                Some(tab) => self.show_panel_tab(tab, cx),
-                None => self.open_new_panel_tab(cx),
-            }
+        if !self.right_panel_parked {
+            self.apply_right_panel_state(cx);
         }
         self.home
             .update(cx, |home, cx| home.set_composer(composer, cx));
@@ -267,6 +267,9 @@ impl ChatApp {
         let real_key = ConversationKey::Thread(thread_id.clone());
         if self.active_conversation == draft_key {
             self.active_conversation = real_key.clone();
+        }
+        if self.right_panel_chats.remove(&draft_key) {
+            self.right_panel_chats.insert(real_key.clone());
         }
         if let Some(panel) = self.file_panels.remove(&draft_key) {
             self.file_panels.insert(real_key.clone(), panel);

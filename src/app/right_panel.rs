@@ -105,6 +105,60 @@ impl ChatApp {
             cx.notify();
         }
     }
+    /// Notes whether the active chat's panel is open, so it comes back as the
+    /// user left it.
+    pub(super) fn remember_right_panel(&mut self) {
+        if self.right_panel.open {
+            self.right_panel_chats
+                .insert(self.active_conversation.clone());
+        } else {
+            self.right_panel_chats.remove(&self.active_conversation);
+        }
+    }
+    /// Shows the active chat's panel if it was open when the window left the
+    /// chat, and hides the panel of a chat that had none.
+    pub(super) fn apply_right_panel_state(&mut self, cx: &mut Context<Self>) {
+        if self.right_panel_chats.contains(&self.active_conversation) {
+            // The chat's own tabs: its selected tab, or a New tab for a chat
+            // without any.
+            self.right_panel.open = true;
+            self.reconcile_panel_tabs(None, cx);
+            match self.active_panel_tab() {
+                Some(tab) => self.show_panel_tab(tab, cx),
+                None => self.open_new_panel_tab(cx),
+            }
+        } else if self.right_panel.open {
+            self.close_right_panel(cx);
+        }
+    }
+    /// The Pull Requests page is not a chat, so a chat's panel must not stay
+    /// beside it: hide it, remembering that the chat had it open.
+    fn park_right_panel(&mut self, cx: &mut Context<Self>) {
+        if self.right_panel_parked {
+            return;
+        }
+        self.remember_right_panel();
+        self.right_panel_parked = true;
+        self.close_right_panel(cx);
+    }
+    /// The window shows a chat again: its panel returns as the chat left it.
+    fn unpark_right_panel(&mut self, cx: &mut Context<Self>) {
+        if !self.right_panel_parked {
+            return;
+        }
+        self.right_panel_parked = false;
+        self.apply_right_panel_state(cx);
+    }
+    /// Matches the panel to the page the window shows. Idempotent: call it
+    /// after the page changes. The Settings page neither hides nor restores
+    /// it, as it covers the content and the panel returns with the chat.
+    pub(super) fn sync_right_panel_page(&mut self, cx: &mut Context<Self>) {
+        if self.showing_pull_requests {
+            self.park_right_panel(cx);
+        } else if !self.showing_settings {
+            self.unpark_right_panel(cx);
+        }
+    }
     pub(super) fn toggle_right_panel(&mut self, cx: &mut Context<Self>) {
         if self.right_panel.open {
             self.close_right_panel(cx);

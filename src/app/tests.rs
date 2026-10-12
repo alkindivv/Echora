@@ -442,6 +442,116 @@ fn right_panel_stays_open_until_its_titlebar_toggle_is_clicked_again() {
 }
 
 #[test]
+fn right_panel_toggle_stays_in_one_place_when_the_panel_opens_and_closes() {
+    let mut app = TestApp::new();
+    let mut window = app.open_window_with_options(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.0), px(0.0)),
+                size: size(px(900.0), px(700.0)),
+            })),
+            ..Default::default()
+        },
+        |_, cx| ChatApp::new(ThemeMode::Dark, false, cx),
+    );
+    let is_open = |window: &TestAppWindow<ChatApp>| window.read(|chat, _| chat.right_panel.open);
+    // The 28px button sits 8px from the window edge plus the card's 8px inset,
+    // x=856..884, whether the panel is open or not, so a click that does not
+    // move toggles it back and forth.
+    window.draw();
+    for x in [857.0, 870.0, 883.0] {
+        let spot = point(px(x), px(23.0));
+        window.simulate_click(spot, MouseButton::Left);
+        assert!(is_open(&window), "click at x={x} opens the panel");
+        window.draw();
+        window.simulate_click(spot, MouseButton::Left);
+        assert!(!is_open(&window), "click at x={x} hides the panel again");
+        window.draw();
+    }
+    // Where the closed button used to sit, past its trailing edge.
+    window.simulate_click(point(px(890.0), px(23.0)), MouseButton::Left);
+    assert!(!is_open(&window));
+    window.simulate_click(point(px(870.0), px(23.0)), MouseButton::Left);
+    window.draw();
+    window.simulate_click(point(px(855.0), px(23.0)), MouseButton::Left);
+    assert!(
+        is_open(&window),
+        "x=855 is outside the button in both states"
+    );
+}
+
+#[test]
+fn right_panel_belongs_to_its_chat_and_hides_behind_the_pull_requests_page() {
+    let mut app = TestApp::new();
+    let mut window = app.open_window_with_options(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.0), px(0.0)),
+                size: size(px(1440.0), px(900.0)),
+            })),
+            ..Default::default()
+        },
+        |_, cx| ChatApp::new(ThemeMode::Dark, false, cx),
+    );
+    let is_open = |window: &TestAppWindow<ChatApp>| window.read(|chat, _| chat.right_panel.open);
+    let first = window.read(|chat, _| chat.active_conversation.clone());
+
+    window.update(|chat, _, cx| chat.open_right_panel(cx));
+    window.draw();
+    assert!(is_open(&window));
+
+    // The Pull Requests page is not a chat: the panel does not stay beside it,
+    // and nothing that opens it there draws it.
+    window.update(|chat, _, cx| chat.open_pull_requests(cx));
+    window.draw();
+    assert!(window.read(|chat, _| chat.showing_pull_requests));
+    assert!(!is_open(&window));
+    window.update(|chat, _, _| chat.right_panel.open = true);
+    window.draw();
+    assert!(
+        !is_open(&window),
+        "a panel opened over Pull requests is hidden again"
+    );
+
+    // Back to the chat: its own panel returns, as it was left.
+    window.update(|chat, _, cx| chat.close_pull_requests(cx));
+    window.draw();
+    assert!(!window.read(|chat, _| chat.showing_pull_requests));
+    assert!(is_open(&window));
+
+    // Another chat starts with its own, closed panel.
+    window.update(|chat, _, cx| {
+        chat.start_draft(None, PathBuf::from("/tmp/second-project"), cx);
+    });
+    let second = window.read(|chat, _| chat.active_conversation.clone());
+    assert_ne!(first, second);
+    assert!(
+        !is_open(&window),
+        "a chat does not inherit another chat's panel"
+    );
+
+    // Pull requests and back leave that chat's panel closed.
+    window.update(|chat, _, cx| chat.open_pull_requests(cx));
+    window.update(|chat, _, cx| chat.close_pull_requests(cx));
+    assert!(!is_open(&window));
+
+    // Opening a chat from the Pull requests page restores that chat's panel,
+    // not the one the window left.
+    window.update(|chat, _, cx| chat.open_right_panel(cx));
+    window.update(|chat, _, cx| chat.switch_home_to(first.clone(), cx));
+    assert!(is_open(&window), "the first chat's panel is still open");
+    window.update(|chat, _, cx| chat.close_right_panel(cx));
+    window.update(|chat, _, cx| chat.open_pull_requests(cx));
+    window.update(|chat, _, cx| {
+        chat.switch_home_to(second.clone(), cx);
+        chat.close_pull_requests(cx);
+    });
+    assert!(is_open(&window), "the second chat's panel is still open");
+    window.update(|chat, _, cx| chat.switch_home_to(first.clone(), cx));
+    assert!(!is_open(&window), "the first chat closed its own panel");
+}
+
+#[test]
 fn collaboration_event_opens_a_read_only_subagent_panel_without_switching_parent() {
     let mut app = TestApp::new();
     let mut window = app.open_window_with_options(
@@ -541,8 +651,9 @@ fn remaining_titlebar_panel_toggle_uses_its_full_hit_area() {
         |_, cx| ChatApp::new(ThemeMode::Dark, false, cx),
     );
 
-    // The removed control's entire former hit area is now titlebar space.
-    for x in [831.0, 844.0, 857.0] {
+    // The removed control's former hit area, left of the toggle, is now
+    // titlebar space.
+    for x in [831.0, 844.0] {
         for y in [10.0, 23.0, 36.0] {
             window.draw();
             window.simulate_click(point(px(x), px(y)), MouseButton::Left);
@@ -550,17 +661,16 @@ fn remaining_titlebar_panel_toggle_uses_its_full_hit_area() {
         }
     }
 
-    // The remaining toggle keeps its original position and 28 px hit area.
-    // Over the open panel it moves in with the card inset and keeps all 28 px
-    // there, on the same row: the card's toolbar is centred on it.
-    let inset = super::RIGHT_PANEL_CARD_INSET;
-    for x in [865.0, 878.0, 891.0] {
+    // The toggle keeps its 28 px hit area, x=856..884: 8px from the window
+    // edge plus the card's 8px inset. Opening the panel does not move it, so
+    // the same click hides the panel again, on the same row.
+    for x in [857.0, 870.0, 883.0] {
         for y in [10.0, 23.0, 36.0] {
             window.draw();
             window.simulate_click(point(px(x), px(y)), MouseButton::Left);
             assert!(window.read(|chat, _| chat.right_panel.open));
             window.draw();
-            window.simulate_click(point(px(x - inset), px(y)), MouseButton::Left);
+            window.simulate_click(point(px(x), px(y)), MouseButton::Left);
             assert!(!window.read(|chat, _| chat.right_panel.open));
         }
     }

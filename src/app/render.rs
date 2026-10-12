@@ -221,6 +221,12 @@ impl Render for ChatApp {
             }
             self.permission_confirmation_focus_pending = false;
         }
+        // While the window shows Pull Requests the chat's panel is parked.
+        // Whatever opens it there, a shortcut or a tool, must not draw it
+        // beside the list, where its controls are not offered.
+        if self.right_panel_parked && self.right_panel.open {
+            self.close_right_panel(cx);
+        }
         let review_overlay =
             if self.right_panel.open && self.right_panel.mode == Some(RightPanelMode::Review) {
                 self.review_panels
@@ -402,11 +408,9 @@ impl Render for ChatApp {
             };
         let summary_mode = SummaryDisplayMode::for_main_width(main_width);
         let summary_available = resumed_title.is_some() && !review_fullscreen;
-        let trailing_controls_inset = if self.right_panel.open {
-            RIGHT_PANEL_CARD_INSET
-        } else {
-            0.0
-        };
+        // The same in both states: the open button and the hide button that
+        // replaces it sit at one spot, so toggling the panel never moves it.
+        let trailing_controls_inset = RIGHT_PANEL_CARD_INSET;
         let summary_shown = summary_available
             && self.summary_panel_visible(summary_mode)
             && self.summary_panel.read(cx).has_content(cx);

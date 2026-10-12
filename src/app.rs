@@ -16,7 +16,12 @@ mod state;
 mod summary;
 mod workspace_panels;
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use gpui::{Context, Entity, WindowAppearance, prelude::*};
 
@@ -119,6 +124,14 @@ pub struct ChatApp {
     file_close_prompt_open: bool,
     terminal_return_focus_pending: bool,
     right_panel: RightPanelState,
+    /// The chats whose right panel was open when the window left them. The
+    /// panel belongs to its chat: another chat, or a page that is not a chat,
+    /// does not inherit it. The active chat's live state is `right_panel.open`.
+    right_panel_chats: HashSet<ConversationKey>,
+    /// The panel is hidden because the window shows the Pull Requests page,
+    /// not because the user closed it; `right_panel_chats` keeps its state
+    /// until a chat is shown again.
+    right_panel_parked: bool,
     /// Each chat's right-panel tabs.
     panel_tabs: HashMap<ConversationKey, panel_tabs::PanelTabs>,
     panel_tab_scroll: gpui::ScrollHandle,
@@ -316,6 +329,7 @@ impl ChatApp {
                 this.sidebar
                     .update(cx, |sidebar, cx| sidebar.set_pull_requests_open(false, cx));
                 this.select_conversation(event.thread_id.clone(), cx);
+                this.sync_right_panel_page(cx);
                 cx.notify();
             },
         )
@@ -331,6 +345,7 @@ impl ChatApp {
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                 this.showing_pull_requests = false;
                 this.start_draft(None, cwd, cx);
+                this.sync_right_panel_page(cx);
                 let key = this.active_conversation.clone();
                 if let Some(host) = this.conversation_hosts.get(&key) {
                     host.composer.update(cx, |composer, cx| {
@@ -372,25 +387,28 @@ impl ChatApp {
             this.open_project_creation(cx);
         })
         .detach();
+        // Each handler shows the chat first and only then leaves the Pull
+        // Requests page, so the chat's panel is restored once, not the one of
+        // the chat the window leaves.
         cx.subscribe(&sidebar, |this, _, event: &SelectThread, cx| {
-            this.close_pull_requests(cx);
             this.select_conversation(event.thread_id.clone(), cx);
+            this.close_pull_requests(cx);
         })
         .detach();
         cx.subscribe(&sidebar, |this, _, event: &NewConversation, cx| {
-            this.close_pull_requests(cx);
             this.start_draft(event.project_id.clone(), event.cwd.clone(), cx);
+            this.close_pull_requests(cx);
         })
         .detach();
         cx.subscribe(
             &sidebar,
             |this, sidebar, event: &crate::components::sidebar::NewChatInSection, cx| {
-                this.close_pull_requests(cx);
                 let (project_id, cwd) =
                     sidebar.update(cx, |sidebar, _| sidebar.new_conversation_target());
                 this.start_draft(project_id, cwd, cx);
                 this.draft_sections
                     .insert(this.active_conversation.clone(), event.0.clone());
+                this.close_pull_requests(cx);
             },
         )
         .detach();
@@ -398,6 +416,7 @@ impl ChatApp {
             &settings,
             |this, _, event: &crate::settings::OpenSettingsFile, cx| {
                 this.showing_settings = false;
+                this.sync_right_panel_page(cx);
                 this.open_matched_file(event.0.display().to_string(), false, cx);
                 cx.notify();
             },
@@ -406,6 +425,7 @@ impl ChatApp {
         cx.subscribe(&settings, |this, _, _: &CloseSettings, cx| {
             this.showing_settings = false;
             this.showing_pull_requests = false;
+            this.sync_right_panel_page(cx);
             if let Some(host) = this.conversation_hosts.get(&this.active_conversation) {
                 host.composer
                     .update(cx, |composer, cx| composer.refresh_draft_defaults(cx));
@@ -589,6 +609,8 @@ impl ChatApp {
             file_close_prompt_open: false,
             terminal_return_focus_pending: false,
             right_panel: RightPanelState::new(cx),
+            right_panel_chats: HashSet::new(),
+            right_panel_parked: false,
             panel_tabs: HashMap::new(),
             panel_tab_scroll: gpui::ScrollHandle::new(),
             panel_tab_frozen_width: None,
@@ -1059,6 +1081,8 @@ impl ChatApp {
     pub fn open_pull_requests(&mut self, cx: &mut Context<Self>) {
         self.showing_settings = false;
         self.showing_pull_requests = true;
+        // The page is not a chat: the chat's right panel does not stay beside it.
+        self.sync_right_panel_page(cx);
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.set_pull_requests_open(true, cx));
         let ratio = self
@@ -1219,6 +1243,7 @@ impl ChatApp {
             return;
         }
         self.showing_pull_requests = false;
+        self.sync_right_panel_page(cx);
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.set_pull_requests_open(false, cx));
         cx.notify();
