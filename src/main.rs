@@ -173,6 +173,22 @@ fn capture_frame(window: &mut gpui::Window, path: String, frames: usize) {
 fn schedule_screenshot(window: &mut gpui::Window, path: String, frames: usize) {
     window.on_next_frame(move |window, cx| {
         if frames > 1 {
+            // `--pointer=x,y` hovers a point a few frames before the capture,
+            // so the hover state is drawn and settled, as the resumed-thread
+            // and Pull Requests captures do.
+            if frames <= 4
+                && let Some(position) = capture_pointer()
+                && !CAPTURE_POINTER_SENT.swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                window.dispatch_event(
+                    gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                        position,
+                        pressed_button: None,
+                        modifiers: gpui::Modifiers::default(),
+                    }),
+                    cx,
+                );
+            }
             // `on_next_frame` callbacks run before GPUI paints that frame.
             // Dirty each counted frame so the delay represents real draws.
             window.refresh();
