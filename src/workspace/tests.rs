@@ -620,15 +620,17 @@ fn creating_a_project_uses_the_selected_directory_name_and_updates_the_snapshot(
     let path = test_preferences_path("create-project");
     let store = WorkspaceStore::with_preferences_path(backend.clone(), path.clone());
 
-    store.create_project(PathBuf::from("/tmp/new-project"));
+    let completion = store.create_project(CreateProject {
+        name: "new-project".into(),
+        roots: vec![PathBuf::from("/tmp/new-project")],
+    });
+    assert!(completion.recv_blocking().unwrap().is_ok());
 
     wait_until(|| {
         !store
             .snapshot()
             .pending
-            .contains(&WorkspaceOperation::CreateProject(
-                "/tmp/new-project".to_owned(),
-            ))
+            .contains(&WorkspaceOperation::CreateProject("new-project".to_owned()))
     });
     assert_eq!(
         store
@@ -962,6 +964,38 @@ fn archiving_priority_chats_reports_each_outcome() {
     let calls = backend.calls();
     assert!(calls.contains(&"thread/archive:thread-a".to_owned()));
     assert!(calls.contains(&"thread/archive:thread-b".to_owned()));
+    if let Some(parent) = path.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
+
+#[test]
+fn project_marker_persists_independently_of_server_projects() {
+    let path = test_preferences_path("project-marker");
+    let store = WorkspaceStore::with_preferences_path(FakeWorkspaceBackend::new(), path.clone());
+    let marker = super::ProjectMarker {
+        emoji: None,
+        icon: "flask".into(),
+        color: 5,
+    };
+    store.set_project_marker("created-project".into(), Some(marker.clone()));
+    let reloaded = WorkspaceStore::with_preferences_path(FakeWorkspaceBackend::new(), path.clone());
+    assert_eq!(
+        reloaded
+            .snapshot()
+            .preferences
+            .project_markers
+            .get("created-project"),
+        Some(&marker)
+    );
+    reloaded.set_project_marker("created-project".into(), None);
+    assert!(
+        !WorkspaceStore::with_preferences_path(FakeWorkspaceBackend::new(), path.clone())
+            .snapshot()
+            .preferences
+            .project_markers
+            .contains_key("created-project")
+    );
     if let Some(parent) = path.parent() {
         let _ = fs::remove_dir_all(parent);
     }

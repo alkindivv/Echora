@@ -358,10 +358,10 @@ Hook 字段范围：eventName 支持 preToolUse、permissionRequest、postToolUs
 | `process/resizePty` | 实验 | 未接入 | — | — |
 | `process/spawn` | 实验 | 未接入 | — | — |
 | `process/writeStdin` | 实验 | 未接入 | — | — |
-| `project/create` | 实验 | 已接入 | 发送 idempotencyKey、name、roots[{path}]；以 result.project 更新工作区。 | `manager/workspace` |
+| `project/create` | 实验 | 已接入 | 发送 idempotencyKey、name、roots[{path}]；原生表单支持名称与多个规范化源目录，未选目录时创建 `~/Documents/Echora` 下的唯一 Git 工作目录。等待 result.project 后更新列表、激活项目草稿；失败保留表单与目录以供重试。图标／表情符号为本机 UI 偏好；远程主机连接未实现。 | `manager/workspace` |
 | `project/delete` | 实验 | 已接入 | 按 projectId 删除；同步移除项目及关联列表状态。 | `manager/workspace` |
 | `project/import` | 实验 | 未接入 | — | — |
-| `project/list` | 实验 | 已接入 | 按 position 升序分页；提供侧栏项目数据。 | `manager/workspace` |
+| `project/list` | 实验 | 已接入 | 按 position 升序分页；提供侧栏和草稿项目选择器数据。选择或清除时同步草稿 projectId/cwd 并保留输入；首条消息通过 thread/start 使用该上下文。 | `manager/workspace` |
 | `project/move` | 实验 | 已接入 | projectId、nullable beforeProjectId；使用服务端顺序。 | `manager/workspace` |
 | `project/read` | 实验 | 未接入 | — | — |
 | `project/update` | 实验 | 已接入 | 按需发送 name、roots；以 result.project 更新工作区。 | `manager/workspace` |

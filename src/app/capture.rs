@@ -10,10 +10,7 @@ use crate::components::file_panel::FilePanel;
 use gpui::AppContext;
 use gpui::Context;
 
-use super::{
-    ChatApp,
-    state::{ProjectCreationKind, ProjectCreationStep},
-};
+use super::ChatApp;
 use crate::{
     agent::{ProjectId, ThreadId},
     components::file_change::captured_diff_review_fixture,
@@ -592,8 +589,7 @@ impl ChatApp {
     }
     pub fn open_project_creation_remote_for_capture(&mut self, cx: &mut Context<Self>) {
         self.open_project_creation(cx);
-        self.project_creation.kind = ProjectCreationKind::Remote;
-        self.project_creation.step = ProjectCreationStep::Remote;
+        self.project_creation.device_menu = true;
         cx.notify();
     }
     /// `--right-panel-tool=side-chat|browser|terminal|files|review` opens

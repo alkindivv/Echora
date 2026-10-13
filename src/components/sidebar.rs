@@ -44,6 +44,21 @@ pub use activity::{ActivityArchiveConfirmation, ActivityCaptureRequest};
 
 pub struct OpenSettings;
 pub struct OpenProjectCreation;
+
+struct ProjectActionTooltip(String);
+impl Render for ProjectActionTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(8.))
+            .py(px(5.))
+            .rounded(px(6.))
+            .bg(gpui::rgba(0x333333ff))
+            .text_color(gpui::rgba(0xffffffff))
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .child(self.0.clone())
+    }
+}
 /// The sidebar `Pull requests` entry asks the host to open the Pull Requests
 /// page in the main content area.
 pub struct OpenPullRequests;
@@ -88,13 +103,12 @@ impl gpui::EventEmitter<NewConversation> for SidebarView {}
 impl gpui::EventEmitter<NewChatInSection> for SidebarView {}
 
 /// Project and working directory for a new conversation. Selecting a project in
-/// the sidebar drives both; without one the process working directory is used.
+/// the sidebar drives both; without one the user's home directory is used.
 fn new_conversation_target(project: Option<&Project>) -> (Option<ProjectId>, PathBuf) {
     let project_id = project.map(|project| project.project_id.clone());
     let cwd = project
         .and_then(|project| project.roots.first().cloned())
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_default();
+        .unwrap_or_else(crate::components::composer::projectless_cwd);
     (project_id, cwd)
 }
 
@@ -1472,10 +1486,18 @@ impl SidebarView {
         self.new_conversation(project.as_ref(), cx);
     }
 
+    pub fn set_draft_project(&mut self, project_id: Option<ProjectId>, cx: &mut Context<Self>) {
+        self.selected_project_id = project_id;
+        self.selected_thread_id = None;
+        cx.notify();
+    }
+
     fn new_conversation(&mut self, project: Option<&Project>, cx: &mut Context<Self>) {
         let (project_id, cwd) = new_conversation_target(project);
         self.selected_project_id = project_id.clone();
         self.selected_thread_id = None;
+        self.close_transient_menus(cx);
+        self.archived_open = false;
         cx.emit(NewConversation { project_id, cwd });
         cx.notify();
     }
@@ -2369,13 +2391,13 @@ impl SidebarView {
             .flex()
             .items_center()
             .gap(px(6.0))
-            .when(!hovered && !menu_open, |actions| actions.invisible())
             .child(
                 Self::quiet_icon_button(
                     format!("project-menu-{project_id}"),
                     "more-horizontal",
                     theme,
                 )
+                .when(!hovered && !menu_open, |b| b.opacity(0.0))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -2395,9 +2417,24 @@ impl SidebarView {
                     "new-chat",
                     theme,
                 )
+                .when(!hovered && !menu_open, |b| b.opacity(0.0))
+                .focus_visible(|s| s.opacity(1.0))
+                .role(gpui::Role::Button)
+                .aria_label(crate::i18n::format!("在 {name} 中开始新聊天" => "Start new chat in {name}", name = project.name))
+                .focusable().tab_stop(true)
+                .tooltip(|_, cx| cx.new(|_| ProjectActionTooltip(crate::i18n::format!("新聊天" => "New chat"))).into())
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_key_down({
+                    let project = project.clone();
+                    cx.listener(move |this,event: &gpui::KeyDownEvent,_,cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") && !pending {
+                            this.new_conversation(Some(&project),cx); cx.stop_propagation();
+                        }
+                    })
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
-                    this.new_conversation(Some(&new_chat_project), cx);
+                    if !pending { this.new_conversation(Some(&new_chat_project), cx); }
                 })),
             );
         let title = if rename_active {
@@ -2440,9 +2477,11 @@ impl SidebarView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(
-                            icon("command-open-folder", theme.sidebar_text.into()).size(px(16.0)),
-                        ),
+                        .child(crate::components::project_marker::glyph(
+                            self.snapshot.preferences.project_markers.get(&project_id),
+                            theme,
+                            16.,
+                        )),
                 )
                 .child(
                     div()
@@ -3136,6 +3175,7 @@ impl SidebarView {
         let pinned_ids = self.sectioned_thread_ids();
         let sectioned_projects = self.sectioned_project_ids();
         let menu_button = Self::quiet_icon_button("projects-options", "more-horizontal", theme)
+            .when(!show_heading_actions, |b| b.opacity(0.0))
             .on_click(cx.listener(|this, _, _, cx| {
                 cx.stop_propagation();
                 this.projects_section_menu_open = !this.projects_section_menu_open;
@@ -3143,6 +3183,25 @@ impl SidebarView {
                 cx.notify();
             }));
         let add_button = Self::quiet_icon_button("project-add", "add", theme)
+            .when(!show_heading_actions, |b| b.opacity(0.0))
+            .focus_visible(|s| s.opacity(1.0))
+            .role(gpui::Role::Button)
+            .aria_label(crate::i18n::format!("添加新项目" => "Add new project"))
+            .focusable()
+            .tab_stop(can_create)
+            .tooltip(|_, cx| {
+                cx.new(|_| {
+                    ProjectActionTooltip(crate::i18n::format!("添加新项目" => "Add new project"))
+                })
+                .into()
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_key_down(cx.listener(move |_, event: &gpui::KeyDownEvent, _, cx| {
+                if can_create && matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    cx.emit(OpenProjectCreation);
+                    cx.stop_propagation();
+                }
+            }))
             .when(!can_create, |button| button.opacity(0.4).cursor_default())
             .when(can_create, |button| {
                 button.on_click(cx.listener(|_, _, _, cx| {
@@ -3209,7 +3268,6 @@ impl SidebarView {
                         .flex()
                         .items_center()
                         .gap(px(4.0))
-                        .when(!show_heading_actions, |actions| actions.invisible())
                         .child(menu_button)
                         .child(add_button),
                 )
@@ -5103,6 +5161,78 @@ mod tests {
         assert!(summary.starts_with("3"), "{summary}");
         assert_eq!(summary.matches(" · ").count(), 2, "{summary}");
         assert_eq!(summary.matches("1").count(), 2, "{summary}");
+    }
+
+    #[test]
+    fn project_new_chat_button_uses_its_own_target_and_does_not_toggle_the_row() {
+        let path = std::env::temp_dir()
+            .join(format!("echora-project-button-{}", std::process::id()))
+            .join("preferences.json");
+        let store = WorkspaceStore::with_preferences_path(SidebarBackend::new(), path.clone());
+        store.refresh_all();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while store.snapshot().loading.projects || store.snapshot().loading.recent {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut app = TestApp::new();
+        let mut window = app.open_window_with_options(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(0.), px(0.)),
+                    size(px(900.), px(700.)),
+                ))),
+                ..Default::default()
+            },
+            |_, cx| SidebarView::new(ThemeMode::Dark, false, store.clone(), cx),
+        );
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        window.update(|_, _, cx| {
+            cx.subscribe(
+                &cx.entity(),
+                move |_: &mut SidebarView, _, event: &super::NewConversation, _| {
+                    recorded.lock().unwrap().push(event.clone())
+                },
+            )
+            .detach();
+        });
+        window.update(|sidebar, _, _| {
+            sidebar.selected_project_id = Some("other-project".into());
+            sidebar.selected_thread_id = Some("other-chat".into());
+        });
+        window.draw();
+        let row = window.read(|sidebar, _| {
+            *sidebar
+                .project_row_bounds
+                .borrow()
+                .get("project-stable-id")
+                .unwrap()
+        });
+        let target = point(row.right() - px(12.), row.center().y);
+        window.simulate_mouse_move(target);
+        window.draw();
+        window.simulate_click(target, MouseButton::Left);
+        assert_eq!(events.lock().unwrap().len(), 1);
+        assert_eq!(
+            events.lock().unwrap()[0].project_id.as_deref(),
+            Some("project-stable-id")
+        );
+        assert_eq!(
+            events.lock().unwrap()[0].cwd,
+            PathBuf::from("/tmp/stable-project")
+        );
+        assert!(
+            !store
+                .snapshot()
+                .preferences
+                .collapsed_project_ids
+                .contains("project-stable-id")
+        );
+        assert!(window.read(|sidebar, _| sidebar.selected_thread_id.is_none()));
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
     }
 
     #[test]

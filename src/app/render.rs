@@ -293,8 +293,24 @@ impl Render for ChatApp {
             self.image_preview.focus_active = false;
         }
         if self.project_creation.open && self.project_creation.focus_pending {
-            self.project_creation.focus.focus(window, cx);
+            if self.project_creation.previous_focus.is_none() {
+                self.project_creation.previous_focus = window.focused(cx);
+            }
+            if self.project_creation.creating {
+                self.project_creation.focus.focus(window, cx);
+            } else {
+                self.project_creation
+                    .name
+                    .read(cx)
+                    .focus_handle(cx)
+                    .focus(window, cx);
+            }
             self.project_creation.focus_pending = false;
+        }
+        if !self.project_creation.open
+            && let Some(previous) = self.project_creation.previous_focus.take()
+        {
+            previous.focus(window, cx);
         }
         if self.right_panel.open && self.right_panel.focus_pending {
             self.right_panel.focus.focus(window, cx);

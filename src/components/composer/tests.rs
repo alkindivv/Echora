@@ -4032,3 +4032,79 @@ fn generation_rebuild_rejects_stale_permission_selection_before_catalog_reload()
         assert_eq!(composer.permission_mode, PermissionMode::Request);
     });
 }
+
+#[test]
+fn project_picker_search_selection_clear_and_first_request_use_the_draft_target() {
+    use super::project_picker::ProjectChoice;
+    use crate::agent::Project;
+    let mut app = TestApp::new();
+    let backend = RecordingBackend::new();
+    let provider: Arc<dyn AgentBackend> = backend.clone();
+    let composer =
+        app.new_entity(|cx| ComposerView::new_with_backend(ThemeMode::Dark, provider, cx));
+    app.update_entity(&composer, |c, cx| {
+        c.apply_model_catalog(test_model_catalog());
+        c.set_available_projects(
+            &[Project {
+                project_id: "chosen".into(),
+                name: "Research".into(),
+                roots: vec![PathBuf::from("/tmp/chosen-root")],
+                created_at: 0,
+                updated_at: 0,
+                recency_at: None,
+                position: 0,
+            }],
+            false,
+            None,
+            cx,
+        );
+        c.set_draft_text("preserved text", cx);
+    });
+    let selected = Arc::new(Mutex::new(Vec::new()));
+    let selections = selected.clone();
+    app.update_entity(&composer, |_, cx| {
+        cx.subscribe(
+            &composer,
+            move |c, _, event: &super::DraftProjectSelected, cx| {
+                selections.lock().unwrap().push(event.0.clone());
+                let cwd = if event.0.is_some() {
+                    PathBuf::from("/tmp/chosen-root")
+                } else {
+                    super::projectless_cwd()
+                };
+                c.set_workspace_context(cwd, event.0.clone(), None, cx);
+            },
+        )
+        .detach()
+    });
+    app.update_entity(&composer, |c, cx| {
+        c.project_picker
+            .input
+            .update(cx, |input, cx| input.set_text_silently("chosen-root", cx));
+        c.project_picker.open = true;
+        c.confirm_project_picker(cx);
+        assert!(!c.project_picker.open);
+        assert_eq!(c.prompt_editor.read(cx).text(), "preserved text");
+    });
+    app.update_entity(&composer, |c, cx| {
+        assert_eq!(c.conversation.project_id.as_deref(), Some("chosen"));
+        seed_permission_catalog(c);
+        c.submit_prompt(c.prompt_editor.read(cx).text().to_owned(), cx);
+    });
+    assert_eq!(
+        selected.lock().unwrap().as_slice(),
+        &[Some("chosen".into())]
+    );
+    let requests = backend.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].cwd, PathBuf::from("/tmp/chosen-root"));
+    assert_eq!(requests[0].project_id.as_deref(), Some("chosen"));
+    drop(requests);
+    app.update_entity(&composer, |c, cx| {
+        c.apply_project_choice(ProjectChoice::Clear, cx);
+    });
+    app.update_entity(&composer, |c, _| {
+        assert_eq!(c.conversation.cwd, super::projectless_cwd());
+        assert!(c.conversation.project_id.is_none());
+    });
+}

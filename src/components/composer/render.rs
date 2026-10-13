@@ -5,10 +5,7 @@ use gpui::{
     TextAlign, TextRun, Window, canvas, deferred, div, hsla, point, prelude::*, px, rgba, size,
 };
 
-use super::{
-    COMPOSER_CORNER_RADIUS, ComposerView, DictationState, MODEL_PICKER_TRIGGER_GAP,
-    WorkspacePresentation,
-};
+use super::{COMPOSER_CORNER_RADIUS, ComposerView, DictationState, MODEL_PICKER_TRIGGER_GAP};
 use crate::{
     components::icons::icon,
     conversation::ConversationPhase,
@@ -142,7 +139,7 @@ impl ComposerView {
             .flex_col()
             .gap(px(0.0))
             .when(!conversation_started && !self.side_chat, |composer| {
-                composer.child(context_toolbar(&self.workspace, theme))
+                composer.child(context_toolbar(self, theme, cx))
             })
             .child(self.submission_feedback(theme, cx))
             .when(self.tray_height() > 0.0, |composer| {
@@ -609,7 +606,7 @@ const BRANCH_VALUE_FADE: f32 = 16.0;
 /// Project control on the home utility bar. A projectless conversation shows
 /// the reference's `Choose project` value in the tertiary foreground and has
 /// no project to clear.
-pub(super) fn project_utility(label: Option<SharedString>, theme: Theme) -> impl IntoElement {
+pub(super) fn project_utility(label: Option<SharedString>, theme: Theme) -> gpui::Stateful<Div> {
     let group = "composer-project-hover";
     let hover_fill = theme.text.alpha(0.05);
     let has_project = label.is_some();
@@ -799,8 +796,13 @@ fn faded_value(text: SharedString, color: Hsla) -> impl IntoElement {
         )
 }
 
-pub(super) fn context_toolbar(workspace: &WorkspacePresentation, theme: Theme) -> Div {
-    let branch = workspace
+pub(super) fn context_toolbar(
+    composer: &ComposerView,
+    theme: Theme,
+    cx: &mut Context<ComposerView>,
+) -> Div {
+    let branch = composer
+        .workspace
         .checkout
         .as_ref()
         .and_then(|checkout| checkout.branch())
@@ -837,7 +839,7 @@ pub(super) fn context_toolbar(workspace: &WorkspacePresentation, theme: Theme) -
                 .flex()
                 .items_center()
                 .gap(px(4.0))
-                .child(project_utility(workspace.project_label.clone(), theme))
+                .child(composer.project_trigger(theme, cx))
                 .child(utility(
                     "composer-location",
                     crate::i18n::text("本地"),

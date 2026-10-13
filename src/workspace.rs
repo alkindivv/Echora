@@ -26,8 +26,8 @@ use loaders::{
     load_all_turns, receive,
 };
 pub use preferences::{
-    ActivityPreferences, FollowUpMode, PanelRatio, ReviewDelivery, ReviewPreferences,
-    UiPreferences, preferred_language,
+    ActivityPreferences, FollowUpMode, PanelRatio, ProjectMarker, ReviewDelivery,
+    ReviewPreferences, UiPreferences, preferred_language,
 };
 use preferences::{PreferenceStore, default_preferences_path};
 pub use pull_requests::{
@@ -253,6 +253,11 @@ impl WorkspaceStore {
         store.initialize_pull_request_backfill();
         Self::listen_for_backend_events(&store);
         store
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_project_for_test(&self, project: Project) {
+        self.update(|snapshot| snapshot.projects.push(project));
     }
 
     pub fn snapshot(&self) -> WorkspaceSnapshot {
@@ -832,34 +837,34 @@ impl WorkspaceStore {
         });
     }
 
-    pub fn create_project(self: &Arc<Self>, root: PathBuf) {
-        let name = root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(crate::i18n::text("项目"))
-            .to_owned();
-        let operation = WorkspaceOperation::CreateProject(root.display().to_string());
+    pub fn create_project(
+        self: &Arc<Self>,
+        project: CreateProject,
+    ) -> Receiver<WorkspaceResult<Project>> {
+        let operation = WorkspaceOperation::CreateProject(project.name.clone());
         self.begin(operation.clone());
-        let receiver = self.backend.create_project(CreateProject {
-            name,
-            roots: vec![root],
-        });
+        let receiver = self.backend.create_project(project);
+        let (sender, completion) = async_channel::bounded(1);
         let store = Arc::clone(self);
-        std::thread::spawn(
-            move || match receive(receiver, crate::i18n::text("创建项目")) {
+        std::thread::spawn(move || {
+            let result = receive(receiver, crate::i18n::text("创建项目"));
+            match &result {
                 Ok(project) => {
                     if let Ok(mut deleted) = store.deleted_project_ids.lock() {
                         deleted.remove(&project.project_id);
                     }
-                    store.update(|snapshot| upsert_project(&mut snapshot.projects, project));
+                    store
+                        .update(|snapshot| upsert_project(&mut snapshot.projects, project.clone()));
                     store.finish(&operation, None);
                 }
                 Err(error) => store.finish(
                     &operation,
                     Some(error.user_message(crate::i18n::text("创建项目"))),
                 ),
-            },
-        );
+            }
+            let _ = sender.send_blocking(result);
+        });
+        completion
     }
 
     pub fn update_project(self: &Arc<Self>, project_id: ProjectId, update: UpdateProject) {
@@ -1333,6 +1338,18 @@ impl WorkspaceStore {
     }
     pub fn set_follow_up_mode(&self, mode: preferences::FollowUpMode) {
         self.update(|snapshot| snapshot.preferences.follow_up_mode = mode);
+        self.save_preferences();
+    }
+
+    pub fn set_project_marker(&self, project_id: ProjectId, marker: Option<ProjectMarker>) {
+        self.update(|snapshot| {
+            let preferences = &mut snapshot.preferences;
+            if let Some(marker) = marker {
+                preferences.project_markers.insert(project_id, marker);
+            } else {
+                preferences.project_markers.remove(&project_id);
+            }
+        });
         self.save_preferences();
     }
 

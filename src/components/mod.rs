@@ -22,6 +22,7 @@ pub mod icons;
 pub mod markdown;
 pub mod mcp_elicitation;
 pub mod permissions_approval;
+pub(crate) mod project_marker;
 pub mod prompt_input;
 pub mod pull_requests;
 pub mod review_panel;

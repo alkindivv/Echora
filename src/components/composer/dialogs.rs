@@ -66,6 +66,9 @@ impl ComposerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if let Some(picker) = self.render_project_picker(window, cx) {
+            return Some(picker);
+        }
         let dialog = self.dialog.clone()?;
         if self.dialog_focus_pending {
             self.dialog_focus_pending = false;

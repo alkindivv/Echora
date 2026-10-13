@@ -21,6 +21,7 @@ mod memories;
 mod memories_tests;
 mod permissions;
 mod picker;
+mod project_picker;
 mod render;
 mod requests;
 mod review;
@@ -32,6 +33,8 @@ mod slash_menu_render;
 mod submissions;
 mod toast;
 mod workspace;
+pub(crate) use project_picker::projectless_cwd;
+pub use project_picker::{DraftProjectSelected, OpenProjectCreation};
 
 #[cfg(feature = "screenshot")]
 pub(crate) use capture::capture_find;
@@ -125,7 +128,10 @@ impl gpui::EventEmitter<ReviewCommentsSubmitted> for ComposerView {}
 pub struct ReviewCommentsRestored(pub Vec<crate::git_review::ReviewComment>);
 impl gpui::EventEmitter<ReviewCommentsRestored> for ComposerView {}
 
-gpui::actions!(composer, [DismissContextMenu, DismissModelPicker]);
+gpui::actions!(
+    composer,
+    [DismissContextMenu, DismissModelPicker, DismissProjectPicker]
+);
 
 const MODEL_PICKER_WIDTH: f32 = 254.0;
 const MODEL_PICKER_MENU_GAP: f32 = 10.0;
@@ -195,6 +201,7 @@ pub struct ComposerView {
     approval_resolved_capture: bool,
     workspace: WorkspacePresentation,
     checkout_cycle: u64,
+    project_picker: project_picker::ProjectPicker,
     follow_up_mode: crate::workspace::FollowUpMode,
     review_delivery: crate::workspace::ReviewDelivery,
     /// The `/review` submenu's base branches, and the read they came from.
@@ -266,6 +273,12 @@ impl ComposerView {
             DismissModelPicker,
             Some("ComposerModelPicker"),
         )]);
+        cx.bind_keys([gpui::KeyBinding::new(
+            "escape",
+            DismissProjectPicker,
+            Some("ComposerProjectPicker"),
+        )]);
+        let project_picker = project_picker::ProjectPicker::new(mode, cx);
         let connection_events = backend.subscribe_connection_events();
         let prompt_editor = cx.new(|cx| {
             let mut editor = crate::components::file_editor::FileEditor::composer(mode, cx);
@@ -431,6 +444,7 @@ impl ComposerView {
             approval_resolved_capture: false,
             workspace: WorkspacePresentation::default(),
             checkout_cycle: 0,
+            project_picker,
             follow_up_mode: Default::default(),
             review_delivery: Default::default(),
             review_branches: Default::default(),
@@ -762,8 +776,16 @@ impl ComposerView {
         self.conversation.apply_agent_event_batch(events)
     }
 
+    pub fn focus_prompt(&mut self, cx: &mut Context<Self>) {
+        self.focus_prompt_pending = true;
+        cx.notify();
+    }
+
     pub fn set_mode(&mut self, mode: ThemeMode, cx: &mut Context<Self>) {
         self.mode = mode;
+        self.project_picker
+            .input
+            .update(cx, |input, cx| input.set_mode(mode, cx));
         self.prompt_editor
             .update(cx, |editor, cx| editor.set_mode(mode, cx));
         self.user_input_other_input

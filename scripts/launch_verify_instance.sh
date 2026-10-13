@@ -31,6 +31,7 @@
 #   GPUI_UI_PREFERENCES_PATH    forwarded to the app; give concurrent instances
 #                               of the same bundle their own file, because they
 #                               would otherwise overwrite one preferences file
+#   GPUI_CAPTURE_OUTPUT         live capture destination for Cmd+Shift+F12
 #   GPUI_ASSETS_DIR             forwarded to the app
 #   CODEX_HOME                  forwarded to the app, and so to the
 #                               `codex app-server` it spawns: point it at a
@@ -117,7 +118,7 @@ for argument in "$@"; do
 done
 
 forwarded=""
-for name in GPUI_UI_PREFERENCES_PATH GPUI_ASSETS_DIR CODEX_HOME; do
+for name in GPUI_UI_PREFERENCES_PATH GPUI_ASSETS_DIR GPUI_CAPTURE_OUTPUT CODEX_HOME; do
   value="$(eval "printf '%s' \"\${$name:-}\"")"
   [ -n "$value" ] || continue
   forwarded="$forwarded

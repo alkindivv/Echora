@@ -50,12 +50,79 @@ impl ChatApp {
     /// Names every conversation after the project it targets, so the home
     /// heading and the composer's project control follow renames.
     pub(super) fn sync_project_labels(&mut self, projects: &[Project], cx: &mut Context<Self>) {
+        let snapshot = self.workspace_store.snapshot();
         for host in self.conversation_hosts.values() {
             let label = project_label(host.project_id.as_deref(), &host.cwd, projects)
                 .map(SharedString::from);
-            host.composer
-                .update(cx, |composer, cx| composer.set_project_label(label, cx));
+            host.composer.update(cx, |composer, cx| {
+                composer.set_project_label(label, cx);
+                composer.set_available_projects(
+                    projects,
+                    snapshot.loading.projects,
+                    snapshot.error.clone(),
+                    cx,
+                );
+            });
         }
+    }
+
+    pub(super) fn wire_project_selection(composer: &Entity<ComposerView>, cx: &mut Context<Self>) {
+        cx.subscribe(
+            composer,
+            |this, composer, event: &crate::components::composer::DraftProjectSelected, cx| {
+                this.select_draft_project(&composer, event.0.clone(), cx);
+            },
+        )
+        .detach();
+        cx.subscribe(
+            composer,
+            |this, _, event: &crate::components::composer::OpenProjectCreation, cx| {
+                this.project_creation.previous_focus = Some(event.0.clone());
+                this.open_project_creation(cx)
+            },
+        )
+        .detach();
+    }
+
+    pub(super) fn select_draft_project(
+        &mut self,
+        composer: &Entity<ComposerView>,
+        project_id: Option<ProjectId>,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(self.active_conversation, ConversationKey::Draft(_)) {
+            return;
+        }
+        let snapshot = self.workspace_store.snapshot();
+        let cwd = match &project_id {
+            Some(id) => {
+                let Some(project) = snapshot.projects.iter().find(|p| &p.project_id == id) else {
+                    return;
+                };
+                project
+                    .roots
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(crate::components::composer::projectless_cwd)
+            }
+            None => crate::components::composer::projectless_cwd(),
+        };
+        let Some(host) = self.conversation_hosts.get_mut(&self.active_conversation) else {
+            return;
+        };
+        if &host.composer != composer {
+            return;
+        }
+        host.cwd = cwd.clone();
+        host.project_id = project_id.clone();
+        composer.update(cx, |composer, cx| {
+            composer.set_workspace_context(cwd, project_id.clone(), None, cx)
+        });
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_draft_project(project_id, cx));
+        self.sync_project_labels(&snapshot.projects, cx);
+        self.update_chat_search_roots(cx);
+        cx.notify();
     }
 
     pub(super) fn start_draft(
@@ -69,6 +136,7 @@ impl ChatApp {
         let composer = self.new_host_composer(cx);
         composer.update(cx, |composer, cx| {
             composer.set_workspace_context(cwd.clone(), project_id.clone(), None, cx);
+            composer.focus_prompt(cx);
         });
         let key = ConversationKey::Draft(draft_id);
         self.conversation_hosts.insert(

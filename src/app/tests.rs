@@ -1482,120 +1482,161 @@ fn an_empty_backend_does_not_expose_a_phantom_pinned_menu() {
 }
 
 #[test]
-fn project_creation_dialog_matches_reference_close_and_keyboard_behavior() {
+fn project_creation_dismiss_preserves_form_and_cancel_resets_it() {
     let mut app = TestApp::new();
-    let mut window = app.open_window_with_options(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
-                origin: point(px(0.0), px(0.0)),
-                size: size(px(900.0), px(700.0)),
-            })),
-            ..Default::default()
-        },
-        |_, cx| ChatApp::new(ThemeMode::Dark, false, cx),
+    let mut window = app.open_window(|_, cx| ChatApp::new(ThemeMode::Dark, false, cx));
+    window.update(|chat, _, cx| {
+        chat.open_project_creation(cx);
+        chat.project_creation
+            .name
+            .update(cx, |input, cx| input.set_text_silently("Research", cx));
+        chat.project_creation.roots = vec![PathBuf::from("/tmp/research")];
+        chat.close_project_creation(cx);
+        chat.open_project_creation(cx);
+    });
+    assert_eq!(
+        window.read(|chat, cx| chat.project_creation.name.read(cx).text().to_owned()),
+        "Research"
     );
-
-    window.update(|chat, _, cx| chat.open_project_creation(cx));
+    assert_eq!(
+        window.read(|chat, _| chat.project_creation.roots.clone()),
+        vec![PathBuf::from("/tmp/research")]
+    );
     window.draw();
+    window.simulate_keystroke("escape");
+    assert!(!window.read(|chat, _| chat.project_creation.open));
+    window.update(|chat, _, cx| {
+        chat.open_project_creation(cx);
+        chat.cancel_project_creation(cx);
+        chat.open_project_creation(cx);
+    });
+    assert!(window.read(|chat, cx| chat.project_creation.name.read(cx).text().is_empty()));
+    assert!(window.read(|chat, _| chat.project_creation.roots.is_empty()));
+}
+
+#[test]
+fn project_creation_escape_closes_nested_picker_before_dialog() {
+    let mut app = TestApp::new();
+    let mut window = app.open_window(|_, cx| ChatApp::new(ThemeMode::Dark, false, cx));
+    window.update(|chat, _, cx| {
+        chat.open_project_creation(cx);
+        chat.project_creation.device_menu = true;
+    });
+    window.draw();
+    window.simulate_keystroke("escape");
     assert!(window.read(|chat, _| chat.project_creation.open));
-    assert_eq!(
-        window.read(|chat, _| chat.project_creation.kind),
-        super::state::ProjectCreationKind::Local
-    );
-
-    window.simulate_keystroke("tab");
-    assert_eq!(window.read(|chat, _| chat.project_creation.focused_item), 1);
-    window.simulate_keystroke("space");
-    assert_eq!(
-        window.read(|chat, _| chat.project_creation.kind),
-        super::state::ProjectCreationKind::Remote
-    );
-    window.simulate_keystroke("tab");
-    window.simulate_keystroke("tab");
-    assert_eq!(window.read(|chat, _| chat.project_creation.focused_item), 3);
-    window.simulate_keystroke("enter");
-    assert!(!window.read(|chat, _| chat.project_creation.open));
-
-    window.update(|chat, _, cx| chat.open_project_creation(cx));
-    window.draw();
-    window.simulate_click(point(px(50.0), px(80.0)), MouseButton::Left);
-    assert!(!window.read(|chat, _| chat.project_creation.open));
-
-    window.update(|chat, _, cx| chat.open_project_creation(cx));
-    window.draw();
+    assert!(!window.read(|chat, _| chat.project_creation.device_menu));
     window.simulate_keystroke("escape");
     assert!(!window.read(|chat, _| chat.project_creation.open));
 }
 
 #[test]
-fn local_project_next_closes_the_project_type_dialog() {
+fn project_marker_search_keyboard_selects_filtered_result_without_creating_project() {
+    let mut app = TestApp::new();
+    app.update(|cx| {
+        cx.bind_keys([gpui::KeyBinding::new(
+            "enter",
+            crate::components::prompt_input::Submit,
+            Some("PromptInput"),
+        )])
+    });
+    let mut window = app.open_window(|_, cx| ChatApp::new(ThemeMode::Dark, false, cx));
+    window.update(|chat, window, cx| {
+        chat.open_project_creation(cx);
+        chat.project_creation.marker_menu = true;
+        chat.project_creation.focus_pending = false;
+        chat.project_creation
+            .marker_search
+            .update(cx, |input, cx| input.set_text("flask", cx));
+        use gpui::Focusable;
+        chat.project_creation
+            .marker_search
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
+    });
+    window.draw();
+    window.simulate_keystrokes("down enter");
+    assert_eq!(
+        window.read(|chat, _| chat
+            .project_creation
+            .marker
+            .as_ref()
+            .map(|m| m.icon.clone())),
+        Some("flask".into())
+    );
+    assert!(window.read(|chat, _| chat.project_creation.open));
+    assert!(
+        !window.read(|chat, _| chat.project_creation.marker_menu || chat.project_creation.creating)
+    );
+}
+
+#[test]
+fn project_marker_tabs_outside_the_dialog_do_not_dismiss_the_form() {
     let mut app = TestApp::new();
     let mut window = app.open_window_with_options(
         WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
-                origin: point(px(0.0), px(0.0)),
-                size: size(px(900.0), px(700.0)),
-            })),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(1440.), px(900.)),
+            ))),
             ..Default::default()
         },
         |_, cx| ChatApp::new(ThemeMode::Dark, false, cx),
     );
-
-    window.update(|chat, _, cx| chat.open_project_creation(cx));
-    window.draw();
-    window.simulate_click(point(px(732.0), px(493.0)), MouseButton::Left);
-    assert!(!window.read(|chat, _| chat.project_creation.open));
-}
-
-#[test]
-fn remote_project_step_is_preserved_by_dismiss_and_reset_by_cancel() {
-    let mut app = TestApp::new();
-    let mut window = app.open_window(|_, cx| ChatApp::new(ThemeMode::Dark, false, cx));
-
     window.update(|chat, _, cx| {
         chat.open_project_creation(cx);
-        chat.project_creation.kind = super::state::ProjectCreationKind::Remote;
-        chat.advance_project_creation(cx);
-        chat.close_project_creation(cx);
-        chat.open_project_creation(cx);
+        chat.project_creation.marker_menu = true;
     });
-    assert_eq!(
-        window.read(|chat, _| chat.project_creation.step),
-        super::state::ProjectCreationStep::Remote
-    );
-
-    window.update(|chat, _, cx| chat.cancel_project_creation(cx));
-    window.update(|chat, _, cx| chat.open_project_creation(cx));
-    assert_eq!(
-        window.read(|chat, _| chat.project_creation.step),
-        super::state::ProjectCreationStep::Kind
-    );
-    assert_eq!(
-        window.read(|chat, _| chat.project_creation.kind),
-        super::state::ProjectCreationKind::Local
-    );
+    window.draw();
+    window.simulate_click(point(px(354.), px(406.)), MouseButton::Left);
+    assert!(window.read(|chat, _| chat.project_creation.open));
+    assert!(window.read(|chat,_| chat.project_creation.marker_menu && chat.project_creation.marker_emoji));
 }
 
 #[test]
-fn remote_project_keyboard_order_matches_the_native_dialog() {
+fn selecting_draft_project_keeps_text_and_synchronizes_host_and_composer() {
     let mut app = TestApp::new();
-    let mut window = app.open_window(|_, cx| {
-        let mut chat = ChatApp::new(ThemeMode::Dark, false, cx);
-        chat.open_project_creation_remote_for_capture(cx);
-        chat
+    let mut window = app.open_window(|_, cx| ChatApp::new(ThemeMode::Dark, false, cx));
+    window.update(|chat, _, cx| {
+        chat.workspace_store
+            .insert_project_for_test(crate::agent::Project {
+                project_id: "research".into(),
+                name: "Research".into(),
+                roots: vec![PathBuf::from("/tmp/research")],
+                created_at: 0,
+                updated_at: 0,
+                recency_at: None,
+                position: 0,
+            });
+        let composer = chat.home.read(cx).composer_entity();
+        composer.update(cx, |composer, cx| {
+            composer.set_draft_text("Keep this draft", cx)
+        });
+        chat.select_draft_project(&composer, Some("research".into()), cx);
+        let host = &chat.conversation_hosts[&chat.active_conversation];
+        assert_eq!(host.project_id.as_deref(), Some("research"));
+        assert_eq!(host.cwd, PathBuf::from("/tmp/research"));
+        assert_eq!(
+            composer
+                .read(cx)
+                .workspace_presentation()
+                .project_label
+                .as_deref(),
+            Some("Research")
+        );
+        chat.select_draft_project(&composer, None, cx);
+        let host = &chat.conversation_hosts[&chat.active_conversation];
+        assert_eq!(host.project_id, None);
+        assert_eq!(host.cwd, crate::components::composer::projectless_cwd());
+        assert!(
+            composer
+                .read(cx)
+                .workspace_presentation()
+                .project_label
+                .is_none()
+        );
     });
-
-    window.draw();
-    window.simulate_keystroke("tab");
-    assert_eq!(window.read(|chat, _| chat.project_creation.focused_item), 1);
-    window.simulate_keystroke("tab");
-    assert_eq!(window.read(|chat, _| chat.project_creation.focused_item), 2);
-    window.simulate_keystroke("enter");
-    assert!(!window.read(|chat, _| chat.project_creation.open));
-    assert_eq!(
-        window.read(|chat, _| chat.project_creation.step),
-        super::state::ProjectCreationStep::Kind
-    );
 }
 
 #[test]

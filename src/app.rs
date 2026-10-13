@@ -37,6 +37,7 @@ gpui::actions!(
         /// key needs its own context: the global `escape` binding belongs to
         /// permission prompts and would otherwise swallow it.
         DismissThreadRename,
+        DismissProjectCreation,
         CaptureFrame,
         ToggleTerminal,
         ToggleReview,
@@ -234,6 +235,11 @@ const SIDEBAR_TRANSITION_DURATION: Duration = Duration::from_millis(400);
 
 impl ChatApp {
     pub fn new(mode: ThemeMode, scroll_sidebar_to_bottom: bool, cx: &mut Context<Self>) -> Self {
+        cx.bind_keys([gpui::KeyBinding::new(
+            "escape",
+            DismissProjectCreation,
+            Some("ProjectCreation"),
+        )]);
         let codex_app_server = Arc::new(CodexAppServerManager::new());
         let agent_backend: Arc<dyn AgentBackend> = Arc::new(CodexAppServerBackend::with_manager(
             codex_app_server.clone(),
@@ -277,7 +283,7 @@ impl ChatApp {
         .detach();
         let home = cx.new(|cx| HomeView::new_with_backend(mode, agent_backend.clone(), cx));
         let initial_composer = home.read(cx).composer_entity();
-        let initial_cwd = std::env::current_dir().unwrap_or_default();
+        let initial_cwd = crate::components::composer::projectless_cwd();
         let follow_up_mode = workspace_store.snapshot().preferences.follow_up_mode;
         let review_delivery = workspace_store.snapshot().preferences.review_delivery;
         initial_composer.update(cx, |composer, cx| {
@@ -286,6 +292,7 @@ impl ChatApp {
             composer.set_review_delivery(review_delivery, cx);
         });
         Self::wire_code_review(&initial_composer, cx);
+        Self::wire_project_selection(&initial_composer, cx);
         cx.subscribe(
             &initial_composer,
             |this, _, event: &crate::components::composer::FollowUpModeToggled, cx| {
@@ -573,7 +580,7 @@ impl ChatApp {
             crate::components::summary_panel::SummaryPanel::new(mode, workspace_store.clone(), cx)
         });
         Self::wire_summary_panel(&summary_panel, cx);
-        Self {
+        let mut app = Self {
             codex_app_server,
             agent_backend,
             workspace_store,
@@ -632,7 +639,9 @@ impl ChatApp {
             summary_popover_open: false,
             summary_reveal_serial: 0,
             window_was_active: true,
-        }
+        };
+        app.wire_project_creation(cx);
+        app
     }
 
     /// Reapply presentation to child entities, including cached inputs that
@@ -730,6 +739,7 @@ impl ChatApp {
             composer
         });
         Self::wire_code_review(&composer, cx);
+        Self::wire_project_selection(&composer, cx);
         cx.subscribe(
             &composer,
             |this, _, event: &crate::components::composer::FollowUpModeToggled, cx| {

@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{Context, Entity, FocusHandle};
+use gpui::{AppContext, Context, Entity, FocusHandle};
 
 use super::ChatApp;
 use crate::{
@@ -20,18 +20,6 @@ pub(super) enum RightPanelMode {
     SideChat,
     Browser,
     Terminal,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ProjectCreationStep {
-    Kind,
-    Remote,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ProjectCreationKind {
-    Local,
-    Remote,
 }
 
 #[derive(Clone)]
@@ -131,10 +119,20 @@ impl ImagePreviewState {
 
 pub(super) struct ProjectCreationState {
     pub(super) open: bool,
-    pub(super) kind: ProjectCreationKind,
-    pub(super) step: ProjectCreationStep,
-    pub(super) focused_item: usize,
-    pub(super) keyboard_focus: bool,
+    pub(super) name: Entity<crate::components::prompt_input::PromptInput>,
+    pub(super) roots: Vec<PathBuf>,
+    pub(super) creating: bool,
+    pub(super) error: Option<String>,
+    pub(super) device_menu: bool,
+    pub(super) marker_menu: bool,
+    pub(super) marker: Option<crate::workspace::ProjectMarker>,
+    pub(super) marker_search: Entity<crate::components::prompt_input::PromptInput>,
+    pub(super) marker_emoji: bool,
+    pub(super) marker_focused: Option<usize>,
+    pub(super) marker_category: Option<usize>,
+    pub(super) marker_scroll: gpui::UniformListScrollHandle,
+    pub(super) cycle: u64,
+    pub(super) previous_focus: Option<FocusHandle>,
     pub(super) focus: FocusHandle,
     pub(super) focus_pending: bool,
 }
@@ -143,10 +141,32 @@ impl ProjectCreationState {
     pub(super) fn new(cx: &mut Context<ChatApp>) -> Self {
         Self {
             open: false,
-            kind: ProjectCreationKind::Local,
-            step: ProjectCreationStep::Kind,
-            focused_item: 0,
-            keyboard_focus: false,
+            name: cx.new(|cx| {
+                crate::components::prompt_input::PromptInput::project_name(
+                    crate::theme::ThemeMode::Dark,
+                    "项目名称",
+                    cx,
+                )
+            }),
+            roots: Vec::new(),
+            creating: false,
+            error: None,
+            device_menu: false,
+            marker_menu: false,
+            marker: None,
+            marker_search: cx.new(|cx| {
+                crate::components::prompt_input::PromptInput::project_name(
+                    crate::theme::ThemeMode::Dark,
+                    crate::i18n::format!("搜索图标" => "Search icons"),
+                    cx,
+                )
+            }),
+            marker_emoji: false,
+            marker_focused: None,
+            marker_category: None,
+            marker_scroll: gpui::UniformListScrollHandle::new(),
+            cycle: 0,
+            previous_focus: None,
             focus: cx.focus_handle().tab_stop(true),
             focus_pending: false,
         }

@@ -58,6 +58,10 @@ pub struct UiPreferences {
     /// `sectionOrder`, is kept locally. New sections are appended.
     #[serde(default)]
     pub section_order: Vec<ThreadSectionId>,
+    /// A project marker is desktop presentation state; app-server projects
+    /// currently expose no appearance field.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub project_markers: BTreeMap<ProjectId, ProjectMarker>,
     /// Projects placed in a custom section. App-server sections hold threads
     /// only, so project membership is local, as the reference keeps its
     /// section item keys.
@@ -94,6 +98,17 @@ pub struct UiPreferences {
 pub const ATTACHMENT_RECORD_THREAD_LIMIT: usize = 100;
 pub const ATTACHMENT_RECORD_PER_THREAD_LIMIT: usize = 100;
 pub const BACKFILL_COMPLETED_LIMIT: usize = 100;
+
+/// Project symbols are desktop preferences, independent of the wire protocol.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectMarker {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub color: usize,
+}
 
 /// One thread's pull requests as last read (or written locally when the server
 /// has no attachments).

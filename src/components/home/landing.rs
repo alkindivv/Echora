@@ -78,7 +78,12 @@ pub(super) fn hero_heading(workspace: &WorkspacePresentation) -> Option<HeroHead
 /// flex base size, so it ends 96px taller than the composer row, and the hero
 /// sits on its bottom padding. A composer taller than its half pushes the hero
 /// up through the lower row's content height.
-fn home_hero(heading: Option<HeroHeading>, composer_height: f32, theme: Theme) -> Div {
+fn home_hero(
+    heading: Option<HeroHeading>,
+    composer_height: f32,
+    theme: Theme,
+    composer: Entity<ComposerView>,
+) -> Div {
     div()
         .absolute()
         .top(px(HOME_COLUMN_TOP))
@@ -107,7 +112,7 @@ fn home_hero(heading: Option<HeroHeading>, composer_height: f32, theme: Theme) -
                         .items_center()
                         .gap(px(24.0))
                         .child(icon("home-mark", theme.home_mark.into()).size(px(56.0)))
-                        .child(hero_title(heading, theme)),
+                        .child(hero_title(heading, theme, composer)),
                 ),
         )
         .child(
@@ -121,7 +126,7 @@ fn home_hero(heading: Option<HeroHeading>, composer_height: f32, theme: Theme) -
         )
 }
 
-fn hero_title(heading: Option<HeroHeading>, theme: Theme) -> Div {
+fn hero_title(heading: Option<HeroHeading>, theme: Theme, composer: Entity<ComposerView>) -> Div {
     let title = div()
         .max_w_full()
         .min_h(px(33.6))
@@ -142,7 +147,7 @@ fn hero_title(heading: Option<HeroHeading>, theme: Theme) -> Div {
         .top(px(HERO_GLYPH_OFFSET))
         .child(heading.lead)
         .when_some(heading.project, |title, project| {
-            title.child(hero_project_trigger(project, theme))
+            title.child(hero_project_trigger(project, theme, composer))
         })
         .when(!heading.tail.is_empty(), |title| title.child(heading.tail))
 }
@@ -152,11 +157,42 @@ fn hero_title(heading: Option<HeroHeading>, theme: Theme) -> Div {
 /// `hover:text-secondary`. GPUI underlines are solid or wavy only, so the 1px
 /// dots and 1px gaps Chromium draws are painted directly, snapped to device
 /// pixels from the trigger's leading edge.
-fn hero_project_trigger(project: String, theme: Theme) -> impl IntoElement {
+fn hero_project_trigger(
+    project: String,
+    theme: Theme,
+    composer: Entity<ComposerView>,
+) -> impl IntoElement {
+    let bounds = std::rc::Rc::new(std::cell::Cell::new(None));
+    let click_bounds = bounds.clone();
+    let key_bounds = bounds.clone();
+    let key_composer = composer.clone();
     let dot = theme.text_tertiary;
     div()
         .id("home-hero-project")
         .debug_selector(|| "home-hero-project".to_owned())
+        .role(gpui::Role::Button)
+        .aria_label(crate::i18n::text("选择项目"))
+        .focusable()
+        .tab_stop(true)
+        .cursor_pointer()
+        .on_click(move |_, window, cx| {
+            composer.update(cx, |c, cx| {
+                c.open_project_picker(click_bounds.get(), window, cx)
+            })
+        })
+        .on_key_down(move |e: &gpui::KeyDownEvent, window, cx| {
+            if matches!(e.keystroke.key.as_str(), "enter" | "space" | "down") {
+                key_composer.update(cx, |c, cx| {
+                    c.open_project_picker(key_bounds.get(), window, cx)
+                });
+                cx.stop_propagation();
+            }
+        })
+        .child(
+            canvas(move |b, _, _| bounds.set(Some(b)), |_, _, _, _| {})
+                .absolute()
+                .inset_0(),
+        )
         .relative()
         .max_w_full()
         .hover(move |style| style.text_color(theme.text.alpha(0.65)))
@@ -305,7 +341,7 @@ pub(super) fn home(
             )
         })
         .when(phase == ConversationPhase::Empty && !side_chat, |root| {
-            root.child(home_hero(hero, composer_height, theme))
+            root.child(home_hero(hero, composer_height, theme, composer.clone()))
         })
         .when(phase != ConversationPhase::Empty, |root| {
             root.child(conversation(

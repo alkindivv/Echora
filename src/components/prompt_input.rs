@@ -42,6 +42,8 @@ pub enum PromptInputKind {
     /// The in-app browser's address field: a 28px box with `ps-2`, 13px type
     /// on an 18px line, and the reference's centred `placeholder:text-tertiary`.
     BrowserAddress,
+    /// Borderless 13px field in the project's command menu and creation form.
+    ProjectName,
 }
 
 gpui::actions!(
@@ -90,6 +92,18 @@ impl gpui::EventEmitter<PromptSubmitted> for PromptInput {}
 impl gpui::EventEmitter<PromptChanged> for PromptInput {}
 
 impl PromptInput {
+    pub fn project_name(
+        mode: ThemeMode,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut input = Self::new(mode, cx);
+        input.kind = PromptInputKind::ProjectName;
+        input.submit_empty = true;
+        input.placeholder = placeholder.into();
+        input.accessible_name = Some(input.placeholder.clone());
+        input
+    }
     pub fn new(mode: ThemeMode, cx: &mut Context<Self>) -> Self {
         Self {
             mode,
@@ -995,6 +1009,7 @@ impl PromptInput {
             PromptInputKind::RenameChat => "rename-chat-input",
             PromptInputKind::PullRequestSearch => "pull-request-search-input",
             PromptInputKind::BrowserAddress => "browser-address-input",
+            PromptInputKind::ProjectName => "project-name-input",
         };
         let browser_address = self.kind == PromptInputKind::BrowserAddress;
         let pull_request_search = self.kind == PromptInputKind::PullRequestSearch;
@@ -1008,6 +1023,7 @@ impl PromptInput {
             PromptInputKind::RenameChat => 36.0,
             PromptInputKind::PullRequestSearch => 18.0,
             PromptInputKind::BrowserAddress => 28.0,
+            PromptInputKind::ProjectName => 18.5714,
         };
         let horizontal_padding = match self.kind {
             PromptInputKind::InlineOther => 0.0,
@@ -1017,6 +1033,7 @@ impl PromptInput {
             PromptInputKind::RenameChat => 10.0,
             PromptInputKind::PullRequestSearch => 0.0,
             PromptInputKind::BrowserAddress => 8.0,
+            PromptInputKind::ProjectName => 0.0,
         };
         let top_padding = match self.kind {
             PromptInputKind::InlineOther => 4.0,
@@ -1025,6 +1042,7 @@ impl PromptInput {
             PromptInputKind::Composer => 1.0,
             PromptInputKind::PullRequestSearch => 0.0,
             PromptInputKind::BrowserAddress => 5.0,
+            PromptInputKind::ProjectName => 0.0,
             // (34 - 18.5714) / 2 measured from the reference's content box.
             PromptInputKind::RenameChat => (34.0 - RENAME_CHAT_LINE_HEIGHT) / 2.0,
         };
@@ -1036,7 +1054,7 @@ impl PromptInput {
             },
             _ => rgba(0x539af84d),
         };
-        let font_size = if inline || browser_address {
+        let font_size = if inline || browser_address || self.kind == PromptInputKind::ProjectName {
             13.0
         } else if pull_request_search {
             14.0
@@ -1054,7 +1072,10 @@ impl PromptInput {
             CHAT_SEARCH_LINE_HEIGHT
         } else if pull_request_search || browser_address {
             18.0
-        } else if self.kind == PromptInputKind::RenameChat {
+        } else if matches!(
+            self.kind,
+            PromptInputKind::RenameChat | PromptInputKind::ProjectName
+        ) {
             RENAME_CHAT_LINE_HEIGHT
         } else {
             PROMPT_LINE_HEIGHT
@@ -1129,7 +1150,9 @@ impl Render for PromptInput {
             theme.text_tertiary
         } else if matches!(
             self.kind,
-            PromptInputKind::PullRequestSearch | PromptInputKind::BrowserAddress
+            PromptInputKind::PullRequestSearch
+                | PromptInputKind::BrowserAddress
+                | PromptInputKind::ProjectName
         ) {
             // CDP: `placeholder:text-tertiary`, rgba(255,255,255,0.498) in dark.
             match self.mode {

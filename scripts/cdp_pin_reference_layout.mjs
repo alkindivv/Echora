@@ -69,8 +69,8 @@ const expression = `(async () => {
   const network = original(gate, { disableExposureLog: true });
   // Only a mounted legacy sidebar counts as legacy: a page that has not
   // rendered its shell yet has no rail either.
-  const renderedLayout = document.querySelector('nav[aria-label="App navigation"]') ? 'rail'
-    : document.querySelector('nav[aria-label="Chat history"]') ? 'legacy' : 'unknown';
+  const renderedLayout = document.querySelector('nav[aria-label="App navigation"], nav[aria-label="应用导航"]') ? 'rail'
+    : document.querySelector('nav[aria-label="Chat history"], nav[aria-label="聊天记录"]') ? 'legacy' : 'unknown';
   return {
     networkValue: network.value,
     networkReason: network.details && network.details.reason,
