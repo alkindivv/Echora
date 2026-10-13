@@ -235,25 +235,30 @@ const PROJECT_HOVER_CARD_DELAY: Duration = Duration::from_millis(240);
 /// Grace period so a pointer crossing the 3 px gap into the card keeps it.
 const PROJECT_HOVER_CARD_CLOSE_DELAY: Duration = Duration::from_millis(60);
 /// Sidebar task hover card, measured from the live ChatGPT desktop app over CDP
-/// (`artifacts/thread-hover-20260922/reference/`). It reuses the project card's
-/// 320 px shell, 15 px radius, ring, and shadow, and prints two rows: the task
-/// title with its environment icon and compact timestamp, then the project the
-/// task is filed under.
+/// (`artifacts/thread-hover-20260922/reference/`, re-measured on 26.1007). It
+/// reuses the project card's 320 px shell, 15 px radius, ring, and shadow, and
+/// prints two rows: the task title with its environment icon and compact
+/// timestamp, then the project the task is filed under. The title row has no
+/// height of its own: a one-line title makes the card 58.5 px tall and a title
+/// clamped to three lines makes it 98 px, with the project row staying below.
 const THREAD_HOVER_CARD_WIDTH: f32 = 320.0;
 const THREAD_HOVER_CARD_RADIUS: f32 = 15.0;
 const THREAD_HOVER_CARD_PADDING_X: f32 = 8.0;
 const THREAD_HOVER_CARD_PADDING_Y: f32 = 6.0;
 const THREAD_HOVER_CARD_GAP: f32 = 4.0;
-const THREAD_HOVER_TITLE_ROW_HEIGHT: f32 = 21.0;
+/// One title line (20) plus the half pixel the timestamp sits below it.
+const THREAD_HOVER_TITLE_ROW_MIN_HEIGHT: f32 = 20.5;
 const THREAD_HOVER_ROW_HEIGHT: f32 = 20.0;
 const THREAD_HOVER_TITLE_LINE_HEIGHT: f32 = 20.0;
-const THREAD_HOVER_TITLE_INSET: f32 = 2.0;
+/// `-ms-1.5` with the 6 px of padding puts the title text on the left edge of
+/// the project icon below it (it was `-ms-0.5` in 26.922).
+const THREAD_HOVER_TITLE_INSET: f32 = 6.0;
 const THREAD_HOVER_TITLE_PADDING_X: f32 = 6.0;
 const THREAD_HOVER_TITLE_RADIUS: f32 = 10.0;
 const THREAD_HOVER_TITLE_ICON_GAP: f32 = 4.0;
 const THREAD_HOVER_TITLE_TRAILING_GAP: f32 = 12.0;
-/// `items-baseline` puts the 12 px timestamp one pixel below the 14 px title.
-const THREAD_HOVER_DURATION_OFFSET_Y: f32 = 1.0;
+/// `items-baseline` puts the 12 px timestamp half a pixel below the 14 px title.
+const THREAD_HOVER_DURATION_OFFSET_Y: f32 = 0.5;
 const THREAD_HOVER_ENV_ICON: f32 = 14.0;
 const THREAD_HOVER_PROJECT_ICON: f32 = 16.0;
 const THREAD_HOVER_PROJECT_GAP: f32 = 6.0;
@@ -2766,7 +2771,7 @@ impl SidebarView {
         let title_row = div()
             .w_full()
             .min_w(px(0.0))
-            .h(px(THREAD_HOVER_TITLE_ROW_HEIGHT))
+            .min_h(px(THREAD_HOVER_TITLE_ROW_MIN_HEIGHT))
             .flex()
             .items_start()
             .gap(px(THREAD_HOVER_TITLE_TRAILING_GAP))
@@ -2820,6 +2825,7 @@ impl SidebarView {
                     .line_height(px(THREAD_HOVER_ROW_HEIGHT))
                     .text_color(theme.text_tertiary)
                     .child(duration),
+                            .debug_selector(|| "THREAD_HOVER_TITLE".to_owned())
             );
 
         div()
@@ -2864,6 +2870,7 @@ impl SidebarView {
                 card.child(
                     div()
                         .w_full()
+            .debug_selector(|| "THREAD_HOVER_CARD".to_owned())
                         .min_w(px(0.0))
                         .h(px(THREAD_HOVER_ROW_HEIGHT))
                         .flex()
@@ -2903,6 +2910,7 @@ impl SidebarView {
             )
     }
 
+                        .debug_selector(|| "THREAD_HOVER_PROJECT".to_owned())
     /// The reference's hover-card `pr` section: the chip's pull request (its
     /// title, or its state) opening the pull request, and a "Merge conflicts"
     /// row when GitHub reports them.
@@ -4652,6 +4660,8 @@ mod tests {
 
     impl AgentBackend for SidebarBackend {
         fn capabilities(&self) -> AgentCapabilities {
+        /// Title of the one task the fixture lists.
+        title: &'static str,
             let mut capabilities = vec![
                 AgentCapability::ProjectList,
                 AgentCapability::ThreadList,
@@ -4671,6 +4681,19 @@ mod tests {
             self.renames
                 .lock()
                 .expect("rename log")
+                title: "Stable thread",
+            })
+        }
+
+        fn with_title(title: &'static str) -> Arc<Self> {
+            let (events, event_receiver) = async_channel::unbounded();
+            Arc::new(Self {
+                _events: events,
+                event_receiver,
+                projectless: false,
+                thread_rename: false,
+                renames: Mutex::new(Vec::new()),
+                title,
                 .push(format!("{thread_id}:{name}"));
             response(Ok(()))
         }
@@ -4682,6 +4705,7 @@ mod tests {
         fn load_model_catalog(&self) -> Receiver<Result<AgentModelCatalog, String>> {
             response(Err("not used".to_owned()))
         }
+                title: "Stable thread",
 
         fn load_permission_profiles(
             &self,
@@ -4715,8 +4739,8 @@ mod tests {
         ) -> Receiver<WorkspaceResult<Page<ThreadSummary>>> {
             let threads = (!request.archived).then(|| ThreadSummary {
                 thread_id: "thread-stable-id".to_owned(),
-                title: "Stable thread".to_owned(),
-                preview: "Stable thread".to_owned(),
+                title: self.title.to_owned(),
+                preview: self.title.to_owned(),
                 cwd: if self.projectless {
                     PathBuf::from("/tmp/loose-thread")
                 } else {
@@ -5234,6 +5258,119 @@ mod tests {
                 .expect("the rendered task row records its bounds")
         });
         window.simulate_mouse_move(point(
+    /// Opens the hover card of the fixture's only task and returns the bounds
+    /// of the card, its title, and its project row.
+    fn thread_hover_card_bounds(
+        title: &'static str,
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        Bounds<gpui::Pixels>,
+        Bounds<gpui::Pixels>,
+        Bounds<gpui::Pixels>,
+    ) {
+        // The store reads on real threads, which then wake the view's snapshot
+        // task; without this the scheduler aborts the whole test process.
+        cx.executor().allow_parking();
+        static SERIAL: AtomicU64 = AtomicU64::new(1);
+        let preferences = std::env::temp_dir()
+            .join(format!(
+                "gpui-sidebar-thread-card-{}-{}",
+                std::process::id(),
+                SERIAL.fetch_add(1, Ordering::Relaxed)
+            ))
+            .join("preferences.json");
+        let store = WorkspaceStore::with_preferences_path(
+            SidebarBackend::with_title(title),
+            preferences.clone(),
+        );
+        store.refresh_all();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while store.snapshot().loading.recent {
+            assert!(Instant::now() < deadline, "sidebar fixture did not load");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let handle = cx.add_window(|_, cx| SidebarView::new(ThemeMode::Dark, false, store, cx));
+        let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+        visual.update(|window, cx| window.draw(cx).clear(cx));
+        let row = handle
+            .read_with(&visual, |sidebar, _| {
+                *sidebar
+                    .thread_row_bounds
+                    .borrow()
+                    .get("thread-stable-id")
+                    .expect("the rendered task row records its bounds")
+            })
+            .unwrap();
+        visual.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
+        visual.executor().advance_clock(THREAD_HOVER_CARD_DELAY);
+        visual.run_until_parked();
+        visual.update(|window, cx| window.draw(cx).clear(cx));
+        let bounds = (
+            visual.debug_bounds("THREAD_HOVER_CARD"),
+            visual.debug_bounds("THREAD_HOVER_TITLE"),
+            visual.debug_bounds("THREAD_HOVER_PROJECT"),
+        );
+        if let Some(parent) = preferences.parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+        (
+            bounds.0.expect("the hover card opens"),
+            bounds.1.expect("the card prints the task title"),
+            bounds.2.expect("the card names the task's project"),
+        )
+    }
+
+    /// A title clamped to three lines grows the title row, as in the reference
+    /// (a 98px card with the project row below). The row used to be a fixed
+    /// 21px, so the wrapped title ran over the project row and out of the card.
+    #[gpui::test]
+    fn thread_hover_card_holds_a_three_line_title(cx: &mut gpui::TestAppContext) {
+        let (card, title, project) = thread_hover_card_bounds(
+            "I would like Echora's icon buttons to match the icon buttons of the Synara app in \
+             my library exactly, in function and in style, and I would like you to submit the \
+             change for me directly once every state has been compared against the reference",
+            cx,
+        );
+        let height = |bounds: Bounds<gpui::Pixels>| f32::from(bounds.size.height);
+        assert!(
+            (height(title) - 60.0).abs() <= 1.0,
+            "a title clamped to three 20px lines is 60px tall, got {}",
+            height(title)
+        );
+        assert!(
+            title.bottom() <= project.origin.y,
+            "the title ends at {:?}, below the project row's top {:?}",
+            title.bottom(),
+            project.origin.y
+        );
+        assert!(
+            card.origin.y <= title.origin.y && project.bottom() <= card.bottom(),
+            "the card {card:?} holds the title {title:?} and the project row {project:?}"
+        );
+        // 6 + 60 + 2 + 4 + 20 + 6.
+        assert!(
+            (height(card) - 98.0).abs() <= 1.0,
+            "a three-line card is 98px tall, got {}",
+            height(card)
+        );
+    }
+
+    #[gpui::test]
+    fn thread_hover_card_keeps_its_one_line_height(cx: &mut gpui::TestAppContext) {
+        let (card, title, project) = thread_hover_card_bounds("Stable thread", cx);
+        assert!(
+            (f32::from(card.size.height) - 58.5).abs() <= 1.0,
+            "a one-line card is 58.5px tall, got {}",
+            f32::from(card.size.height)
+        );
+        assert!(title.bottom() <= project.origin.y);
+        // The title text starts where the project icon below it does.
+        assert!(
+            (f32::from(title.origin.x - card.origin.x) - 2.0).abs() <= 0.5,
+            "-6px margin and 8px card padding leave the title box 2px inside the card"
+        );
+    }
+
             row.origin.x + row.size.width / 2.0,
             row.origin.y + row.size.height / 2.0,
         ));
