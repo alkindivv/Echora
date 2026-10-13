@@ -5,6 +5,7 @@ mod auto_review;
 mod background;
 mod capture;
 mod context;
+pub use context::OpenAttachmentPreview;
 mod dialogs;
 mod dictation;
 mod followup;
@@ -45,7 +46,7 @@ pub(crate) use toast::{
 };
 pub use workspace::WorkspacePresentation;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc};
 
 use gpui::{Context, Entity, FocusHandle, Focusable, prelude::*};
 
@@ -71,13 +72,6 @@ pub(crate) const COMPOSER_CORNER_RADIUS: f32 = 24.0;
 /// command. The composer accepts its typed form.
 pub(crate) const COMPACT_COMMAND: &str = "/compact";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PickerSubmenu {
-    Model,
-    Effort,
-    ServiceTier,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum DictationState {
     #[default]
@@ -95,14 +89,9 @@ enum PermissionMode {
 }
 
 impl PermissionMode {
-    const fn at_menu_index(index: usize) -> Self {
-        match index {
-            0 => Self::Request,
-            1 => Self::Assist,
-            2 => Self::Full,
-            _ => Self::Custom,
-        }
-    }
+    /// The permission menu's rows, in order. A custom configuration is kept
+    /// as the current mode but is not offered as a row.
+    const MENU: [Self; 3] = [Self::Request, Self::Assist, Self::Full];
 
     const fn agent_mode(self) -> AgentPermissionMode {
         match self {
@@ -139,33 +128,13 @@ impl gpui::EventEmitter<ReviewCommentsSubmitted> for ComposerView {}
 pub struct ReviewCommentsRestored(pub Vec<crate::git_review::ReviewComment>);
 impl gpui::EventEmitter<ReviewCommentsRestored> for ComposerView {}
 
-gpui::actions!(composer, [DismissContextMenu]);
+gpui::actions!(composer, [DismissContextMenu, DismissModelPicker]);
 
-const MODEL_PICKER_WIDTH: f32 = 224.0;
-const MODEL_PICKER_SUBMENU_GAP: f32 = 1.0;
+const MODEL_PICKER_WIDTH: f32 = 254.0;
+const MODEL_PICKER_MENU_GAP: f32 = 10.0;
 const MODEL_PICKER_TRIGGER_GAP: f32 = 4.0;
-// The open trigger reserves 224px and ends immediately before the 64px
-// dictation/send group inside the composer's 8px trailing inset.
 const MODEL_PICKER_RIGHT_INSET: f32 = 72.0;
-const MODEL_PICKER_MIN_SUBMENU_WIDTH: f32 = 180.0;
-const MODEL_PICKER_ROW_HEIGHT: f32 = 28.5625;
-const MODEL_PICKER_DETAIL_ROW_HEIGHT: f32 = 47.125;
-const MODEL_PICKER_SUBMENU_HEADER_HEIGHT: f32 = 26.0;
-const MODEL_PICKER_SUBMENU_VERTICAL_PADDING: f32 = 8.0;
-// Radix collision handling in the ChatGPT desktop app keeps each submenu's
-// lower edge at the same viewport inset. Relative to this composer's anchored
-// main menu, CDP resolves that edge to 184px below the main menu's top.
-const MODEL_PICKER_SUBMENU_BOTTOM_OFFSET: f32 = 184.0;
-const MODEL_PICKER_SUBMENU_MAX_HEIGHT: f32 = 420.0;
-const HOME_COMPOSER_MAX_WIDTH: f32 = 748.0;
-const APP_SIDEBAR_WIDTH: f32 = 256.125;
 const PARTICLE_TIMELINE_MS: f32 = 120_000.0;
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct SubmenuLayout {
-    open_left: bool,
-    width: f32,
-}
-
 pub struct ComposerView {
     conversation: ConversationState,
     backend: Arc<dyn AgentBackend>,
@@ -188,14 +157,15 @@ pub struct ComposerView {
     /// card renders whichever field currently owns logical focus.
     mcp_elicitation_input: Entity<PromptInput>,
     model_menu_focus: FocusHandle,
+    model_trigger_focus: FocusHandle,
+    model_trigger_bounds: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     model_menu_focused_item: usize,
     model_menu_keyboard_focus: bool,
-    submenu_focused_item: usize,
-    submenu_keyboard_focus: bool,
     menu_open: bool,
-    advanced_expanded: bool,
-    submenu: Option<PickerSubmenu>,
+    model_list_open: bool,
+    model_list_scroll: gpui::ScrollHandle,
     slider_dragging: bool,
+    model_ultra_warning_until: Option<std::time::Instant>,
     dictation_state: DictationState,
     dictation_cycle: u64,
     /// The permission selector is part of the normal Composer UI. Capture
@@ -291,6 +261,11 @@ impl ComposerView {
             "escape",
             DismissContextMenu,
             Some("ComposerContextMenu"),
+        )]);
+        cx.bind_keys([gpui::KeyBinding::new(
+            "escape",
+            DismissModelPicker,
+            Some("ComposerModelPicker"),
         )]);
         let connection_events = backend.subscribe_connection_events();
         let prompt_editor = cx.new(|cx| {
@@ -423,14 +398,15 @@ impl ComposerView {
             user_input_other_input,
             mcp_elicitation_input,
             model_menu_focus: cx.focus_handle(),
+            model_trigger_focus: cx.focus_handle().tab_stop(true),
+            model_trigger_bounds: Rc::new(Cell::new(None)),
             model_menu_focused_item: 0,
             model_menu_keyboard_focus: false,
-            submenu_focused_item: 0,
-            submenu_keyboard_focus: false,
             menu_open: false,
-            advanced_expanded: true,
-            submenu: None,
+            model_list_open: false,
+            model_list_scroll: gpui::ScrollHandle::new(),
             slider_dragging: false,
+            model_ultra_warning_until: None,
             dictation_state: DictationState::Idle,
             dictation_cycle: 0,
             permission_ui_enabled: true,

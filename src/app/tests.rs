@@ -76,6 +76,44 @@ fn approval_shortcuts_remain_registered_across_unrelated_shell_repaints() {
 }
 
 #[test]
+fn model_picker_escape_restores_trigger_focus_with_global_escape_registered() {
+    let mut app = TestApp::new();
+    app.update(|cx| {
+        cx.bind_keys([gpui::KeyBinding::new(
+            "escape",
+            super::DismissPermissionUi,
+            None,
+        )]);
+    });
+    let mut window = app.open_window_with_options(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                point(px(0.0), px(0.0)),
+                size(px(1440.0), px(900.0)),
+            ))),
+            ..Default::default()
+        },
+        |_, cx| ChatApp::new(ThemeMode::Dark, false, cx),
+    );
+    window.draw();
+    window.simulate_click(point(px(1080.0), px(863.0)), MouseButton::Left);
+    window.draw();
+    window.update(|_, window, cx| {
+        assert!(window.is_action_available(&crate::components::composer::DismissModelPicker, cx));
+    });
+    window.simulate_keystroke("escape");
+    window.draw();
+    window.update(|_, window, cx| {
+        assert!(!window.is_action_available(&crate::components::composer::DismissModelPicker, cx));
+    });
+    window.simulate_keystroke("enter");
+    window.draw();
+    window.update(|_, window, cx| {
+        assert!(window.is_action_available(&crate::components::composer::DismissModelPicker, cx));
+    });
+}
+
+#[test]
 fn startup_logo_blinks_in_place_without_disappearing() {
     assert_eq!(startup_loading_logo_opacity(0.0), 1.0);
     assert!((startup_loading_logo_opacity(0.5) - 0.32).abs() < f32::EPSILON);

@@ -2,7 +2,12 @@
 
 use super::ComposerView;
 use crate::{agent::AgentInputFile, components::icons::icon, theme::Theme};
-use gpui::{Context, KeyDownEvent, PathPromptOptions, Role, Window, deferred, div, prelude::*, px};
+use gpui::{
+    Context, KeyDownEvent, PathPromptOptions, Role, Window, deferred, div, img, prelude::*, px,
+};
+
+pub struct OpenAttachmentPreview(pub std::path::PathBuf);
+impl gpui::EventEmitter<OpenAttachmentPreview> for ComposerView {}
 
 impl ComposerView {
     pub(super) fn toggle_context(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -72,11 +77,13 @@ impl ComposerView {
     ) -> impl IntoElement {
         div()
             .id("side-chat-attachments")
-            .h(px(28.0))
-            .mb(px(4.0))
+            .mb(px(6.0))
+            .py(px(4.0))
+            .px(px(4.0))
             .flex_none()
             .flex()
-            .gap(px(6.0))
+            .items_center()
+            .gap(px(12.0))
             .overflow_x_scroll()
             .children(
                 self.prompt_context
@@ -91,6 +98,59 @@ impl ComposerView {
                             .to_string_lossy()
                             .into_owned();
                         let path = file.path.clone();
+                        if file.image {
+                            let key_path = path.clone();
+                            let remove_path = path.clone();
+                            let keyboard_remove_path = path.clone();
+                            let group = gpui::SharedString::from(format!("composer-image-{index}"));
+                            return div()
+                                .id(("composer-image", index))
+                                .debug_selector(move || format!("COMPOSER_IMAGE_{index}"))
+                                .role(Role::Button)
+                                .aria_label(crate::i18n::format!("预览图片 {label}" => "Preview image {label}"))
+                                .focusable().tab_stop(true)
+                                .group(group.clone())
+                                .relative().flex_none().size(px(122.0))
+                                .rounded(px(10.0)).cursor_pointer()
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cx.emit(OpenAttachmentPreview(path.clone()));
+                                    cx.stop_propagation();
+                                }))
+                                .on_key_down(cx.listener(move |_, event: &KeyDownEvent, _, cx| {
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                        cx.emit(OpenAttachmentPreview(key_path.clone()));
+                                        cx.stop_propagation();
+                                    }
+                                }))
+                                .child(div().size_full().rounded(px(10.0)).overflow_hidden()
+                                    .child(img(file.path.clone()).flex_none().size(px(122.0)).aspect_ratio(1.0).rounded(px(10.0)).object_fit(gpui::ObjectFit::Cover)))
+                                .child(div().absolute().inset_0().rounded(px(10.0))
+                                    .border_1().border_color(theme.text.alpha(0.1))
+                                    .group_hover(group.clone(), move |s| s.bg(theme.text.alpha(0.05)).border_color(theme.text.alpha(0.2))))
+                                .child(div().id(("side-chat-remove-attachment", index))
+                                    .role(Role::Button)
+                                    .aria_label(crate::i18n::format!("移除附件 {label}" => "Remove attachment {label}"))
+                                    .focusable().tab_stop(true)
+                                    .absolute().top(px(-2.0)).right(px(-2.0)).size(px(16.0))
+                                    .rounded_full().bg(theme.text).text_color(theme.control_soft)
+                                    .shadow(vec![gpui::BoxShadow::new(px(0.0), px(0.0), theme.surface.into()).spread_radius(px(2.0))])
+                                    .flex().items_center().justify_center().cursor_pointer()
+                                    .opacity(0.0)
+                                    .group_hover(group, |s| s.opacity(1.0))
+                                    .focus_visible(|s| s.opacity(1.0))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.remove_attachment(&remove_path, cx);
+                                        cx.stop_propagation();
+                                    }))
+                                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                            this.remove_attachment(&keyboard_remove_path, cx);
+                                            cx.stop_propagation();
+                                        }
+                                    }))
+                                    .child(icon("close-dialog", theme.surface.into()).size(px(12.0))))
+                                .into_any_element();
+                        }
                         div()
                             .id(("side-chat-attachment", index))
                             .flex_none()
@@ -104,11 +164,7 @@ impl ComposerView {
                             .gap(px(6.0))
                             .child(
                                 icon(
-                                    if file.image {
-                                        "panel-files"
-                                    } else {
-                                        "utility-folder"
-                                    },
+                                    "utility-folder",
                                     theme.text_secondary.into(),
                                 )
                                 .size(px(14.0)),
@@ -160,8 +216,16 @@ impl ComposerView {
                                             .size(px(12.0)),
                                     ),
                             )
+                            .into_any_element()
                     }),
             )
+    }
+
+    fn remove_attachment(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        self.draft_revision = self.draft_revision.wrapping_add(1);
+        self.prompt_context.files.retain(|file| file.path != path);
+        self.focus_prompt_pending = true;
+        cx.notify();
     }
 
     pub(super) fn render_context_menu(

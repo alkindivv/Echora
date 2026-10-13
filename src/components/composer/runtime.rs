@@ -17,10 +17,12 @@ use crate::{
 impl ComposerView {
     pub(super) fn request_effort(&self) -> String {
         if self.prompt_context.plan_mode == Some(true) && !self.conversation.model_user_selected {
-            self.conversation
-                .plan_default_effort
-                .clone()
-                .unwrap_or_else(|| self.conversation.selected_effort.clone())
+            self.conversation.resolve_effort_for_selection(Some(
+                self.conversation
+                    .plan_default_effort
+                    .clone()
+                    .unwrap_or_else(|| self.conversation.selected_effort.clone()),
+            ))
         } else {
             self.conversation.selected_effort.clone()
         }
@@ -188,10 +190,7 @@ impl ComposerView {
         } else {
             None
         };
-        if !running
-            && (self.conversation.selected_model.is_empty()
-                || self.conversation.selected_effort.is_empty())
-        {
+        if !running && self.conversation.selected_model.is_empty() {
             self.submission_error =
                 Some(crate::i18n::text("没有可用模型，请选择模型后重试。输入已保留。").into());
             cx.notify();
@@ -269,7 +268,7 @@ impl ComposerView {
         self.menu_open = false;
         self.permission_menu_open = false;
         self.permission_menu_keyboard_focus = false;
-        self.submenu = None;
+        self.model_list_open = false;
         self.clear_prompt(cx);
         self.prompt_context.files.clear();
         self.context_menu_open = false;

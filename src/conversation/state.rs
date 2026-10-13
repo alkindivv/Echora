@@ -67,6 +67,9 @@ pub(crate) struct ConversationState {
     pub(crate) models: Vec<AgentModel>,
     pub(crate) model_catalog_error: Option<String>,
     pub(crate) model_user_selected: bool,
+    /// A specific model was chosen (configuration, thread or model list), as
+    /// opposed to following the catalog default.
+    pub(crate) model_explicit: bool,
     pub(crate) plan_default_effort: Option<String>,
     pub(crate) selected_model: String,
     pub(crate) selected_effort: String,
@@ -143,6 +146,7 @@ impl Default for ConversationState {
             models: Vec::new(),
             model_catalog_error: None,
             model_user_selected: false,
+            model_explicit: false,
             plan_default_effort: None,
             selected_model: String::new(),
             selected_effort: String::new(),

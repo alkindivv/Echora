@@ -126,7 +126,7 @@ impl ComposerView {
         self.context_focus_pending = false;
         self.menu_open = false;
         self.permission_menu_open = false;
-        self.submenu = None;
+        self.model_list_open = false;
         self.context_menu_open = false;
         cx.notify();
     }
@@ -139,6 +139,8 @@ impl ComposerView {
             + 54.0
             + if self.prompt_context.files.is_empty() {
                 0.0
+            } else if self.prompt_context.files.iter().any(|file| file.image) {
+                130.0
             } else {
                 32.0
             }

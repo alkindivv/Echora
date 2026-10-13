@@ -11,11 +11,8 @@ use std::{
 use gpui::{Bounds, Focusable, MouseButton, TestApp, WindowBounds, WindowOptions, point, px, size};
 
 use super::{
-    ComposerView, ConversationActivity, ConversationChanged, ConversationPhase,
-    MODEL_PICKER_DETAIL_ROW_HEIGHT, MODEL_PICKER_ROW_HEIGHT, MODEL_PICKER_SUBMENU_BOTTOM_OFFSET,
-    MODEL_PICKER_SUBMENU_HEADER_HEIGHT, MODEL_PICKER_SUBMENU_VERTICAL_PADDING,
-    MODEL_PICKER_TRIGGER_GAP, PermissionMode, SubmenuLayout,
-    layout::{max_particle_drift, particle_layers, particle_transition_ease, submenu_layout},
+    ComposerView, ConversationActivity, ConversationChanged, ConversationPhase, PermissionMode,
+    layout::{max_particle_drift, particle_layers, particle_transition_ease},
 };
 use crate::{
     agent::{
@@ -2042,58 +2039,6 @@ fn interrupt_connection_failure_transitions_to_failed_and_releases_the_handle() 
 }
 
 #[test]
-fn submenu_clamps_to_the_trailing_edge_at_reference_width() {
-    let layout = submenu_layout(1440.0, 280.0);
-    assert!(!layout.open_left);
-    assert_eq!(layout.width, 280.0);
-
-    assert_eq!(
-        submenu_layout(1440.0, 180.0),
-        SubmenuLayout {
-            open_left: false,
-            width: 180.0,
-        }
-    );
-}
-
-#[test]
-fn submenu_flips_before_it_can_overflow_a_small_window() {
-    assert_eq!(
-        submenu_layout(900.0, 280.0),
-        SubmenuLayout {
-            open_left: true,
-            width: 280.0,
-        }
-    );
-}
-
-#[test]
-fn model_picker_geometry_matches_the_chatgpt_cdp_measurements() {
-    let model_height = 7.0 * MODEL_PICKER_ROW_HEIGHT + MODEL_PICKER_SUBMENU_VERTICAL_PADDING;
-    let effort_height = 5.0 * MODEL_PICKER_ROW_HEIGHT
-        + MODEL_PICKER_DETAIL_ROW_HEIGHT
-        + MODEL_PICKER_SUBMENU_HEADER_HEIGHT
-        + MODEL_PICKER_SUBMENU_VERTICAL_PADDING;
-    let speed_height = 2.0 * MODEL_PICKER_DETAIL_ROW_HEIGHT
-        + MODEL_PICKER_SUBMENU_HEADER_HEIGHT
-        + MODEL_PICKER_SUBMENU_VERTICAL_PADDING;
-
-    assert!((model_height - 207.9375).abs() < 0.001);
-    assert!((effort_height - 223.9375).abs() < 0.001);
-    assert!((speed_height - 128.25).abs() < 0.001);
-    assert!((MODEL_PICKER_SUBMENU_BOTTOM_OFFSET - model_height + 23.9375).abs() < 0.001);
-    assert!((MODEL_PICKER_SUBMENU_BOTTOM_OFFSET - effort_height + 39.9375).abs() < 0.001);
-    assert!((MODEL_PICKER_SUBMENU_BOTTOM_OFFSET - speed_height - 55.75).abs() < 0.001);
-    assert_eq!(MODEL_PICKER_TRIGGER_GAP, 4.0);
-    assert_eq!(ComposerView::effort_label("low"), "轻度");
-    assert_eq!(
-        ComposerView::effort_detail("ultra"),
-        Some("更快消耗使用额度")
-    );
-    assert_eq!(ComposerView::effort_detail("high"), None);
-}
-
-#[test]
 fn catalog_default_selection_and_model_switch_use_advertised_defaults() {
     let mut app = TestApp::new();
     let composer = app.new_entity(|cx| ComposerView::new(ThemeMode::Dark, cx));
@@ -2147,9 +2092,9 @@ fn changed_picker_values_can_reset_to_the_advertised_defaults() {
     let composer = app.new_entity(|cx| ComposerView::new(ThemeMode::Dark, cx));
     app.update_entity(&composer, |composer, _| {
         composer.apply_model_catalog(test_model_catalog());
-        assert!(composer.selection_is_default());
+        assert!(!composer.conversation.model_explicit);
         composer.select_effort_at(0);
-        assert!(!composer.selection_is_default());
+        assert_eq!(composer.conversation.selected_effort, "medium");
         composer.reset_model_selection();
     });
 
@@ -2158,8 +2103,8 @@ fn changed_picker_values_can_reset_to_the_advertised_defaults() {
             composer.conversation.selected_model.clone(),
             composer.conversation.selected_effort.clone(),
             composer.conversation.selected_service_tier.clone(),
-            composer.advanced_expanded,
-            composer.selection_is_default(),
+            composer.model_list_open,
+            !composer.conversation.model_explicit,
         )),
         (
             "model-b".into(),
@@ -2193,6 +2138,241 @@ fn slider_uses_the_selected_models_dynamic_effort_options() {
             .selected_effort
             .clone()),
         "high"
+    );
+}
+
+#[test]
+fn configured_model_outside_catalog_keeps_its_identity_and_all_fallback_efforts() {
+    let mut app = TestApp::new();
+    let composer = app.new_entity(|cx| ComposerView::new(ThemeMode::Dark, cx));
+    app.update_entity(&composer, |composer, _| {
+        composer.conversation.selected_model = "custom-provider-model".into();
+        composer.conversation.selected_effort = "xhigh".into();
+        composer.conversation.model_explicit = true;
+        composer.apply_model_catalog(test_model_catalog());
+        assert_eq!(
+            composer.conversation.selected_model,
+            "custom-provider-model"
+        );
+        assert_eq!(composer.selected_model_label(), "自定义");
+        assert_eq!(composer.conversation.slider_index, 4);
+        for (index, effort) in ["minimal", "low", "medium", "high", "xhigh", "max"]
+            .iter()
+            .enumerate()
+        {
+            composer.select_effort_at(index);
+            assert_eq!(composer.request_effort(), *effort);
+            assert_eq!(
+                composer.conversation.selected_model,
+                "custom-provider-model"
+            );
+        }
+        assert!(!composer.fast_mode_available());
+        composer
+            .conversation
+            .set_model_catalog_error("temporary failure".into());
+        assert_eq!(
+            composer.conversation.selected_model,
+            "custom-provider-model"
+        );
+        assert_eq!(composer.conversation.effort_ids().len(), 6);
+    });
+}
+
+#[test]
+fn model_switch_preserves_supported_effort_and_standard_speed_then_resets() {
+    let mut app = TestApp::new();
+    let composer = app.new_entity(|cx| ComposerView::new(ThemeMode::Dark, cx));
+    app.update_entity(&composer, |composer, _| {
+        let mut catalog = test_model_catalog();
+        catalog.models[0].supported_reasoning_efforts =
+            catalog.models[1].supported_reasoning_efforts.clone();
+        composer.apply_model_catalog(catalog);
+        composer.select_effort_at(0);
+        composer.toggle_accelerated_service_tier();
+        composer.select_model_at(0);
+        assert_eq!(composer.request_effort(), "medium");
+        assert_eq!(composer.conversation.selected_service_tier, None);
+        assert!(composer.conversation.model_explicit);
+        composer.reset_model_selection();
+        assert!(!composer.conversation.model_explicit);
+        assert_eq!(composer.request_effort(), "high");
+        assert_eq!(
+            composer.conversation.selected_service_tier.as_deref(),
+            Some("priority")
+        );
+    });
+}
+
+#[test]
+fn non_adjustable_models_show_the_model_list_and_never_fabricate_efforts() {
+    let mut app = TestApp::new();
+    let composer = app.new_entity(|cx| ComposerView::new(ThemeMode::Dark, cx));
+    app.update_entity(&composer, |composer, _| {
+        let mut catalog = test_model_catalog();
+        catalog.models[0].supported_reasoning_efforts.clear();
+        catalog.models[0].default_reasoning_effort.clear();
+        composer.apply_model_catalog(catalog);
+        composer.select_model_at(0);
+        assert!(composer.picker_shows_model_list());
+        assert!(composer.conversation.effort_ids().is_empty());
+        composer.select_effort_at(0);
+        assert!(composer.request_effort().is_empty());
+        composer.select_model_at(1);
+        assert!(!composer.picker_shows_model_list());
+        assert_eq!(composer.conversation.effort_ids(), ["medium", "high"]);
+    });
+}
+
+#[test]
+fn plan_default_effort_matches_the_slider_and_keyboard_selection() {
+    let mut app = TestApp::new();
+    let composer = app.new_entity(|cx| ComposerView::new(ThemeMode::Dark, cx));
+    app.update_entity(&composer, |composer, _| {
+        composer.apply_model_catalog(test_model_catalog());
+        composer.prompt_context.plan_mode = Some(true);
+        composer.conversation.plan_default_effort = Some("medium".into());
+        assert_eq!(composer.request_effort(), "medium");
+        assert_eq!(composer.effective_slider_index(), 0);
+        composer.step_slider(1);
+        assert_eq!(composer.request_effort(), "high");
+        assert_eq!(composer.effective_slider_index(), 1);
+        composer.conversation.model_user_selected = false;
+        composer.conversation.plan_default_effort = Some("medium".into());
+        composer.select_model_at(1);
+        assert_eq!(composer.request_effort(), "medium");
+        composer.conversation.model_user_selected = false;
+        composer.conversation.selected_effort = "high".into();
+        composer.toggle_accelerated_service_tier();
+        assert_eq!(composer.request_effort(), "medium");
+        assert_eq!(composer.effective_slider_index(), 0);
+        composer.conversation.model_user_selected = false;
+        composer.conversation.plan_default_effort = Some("ultra".into());
+        assert_eq!(composer.request_effort(), "high");
+        assert_eq!(composer.effective_slider_index(), 1);
+    });
+}
+
+#[test]
+fn restored_model_effort_stays_within_the_catalog_options() {
+    let mut app = TestApp::new();
+    let composer = app.new_entity(|cx| ComposerView::new(ThemeMode::Dark, cx));
+    app.update_entity(&composer, |composer, _| {
+        composer.apply_model_catalog(test_model_catalog());
+        for (model, effort, expected, index) in [
+            ("model-b", "ultra", "high", 1),
+            ("model-b", "medium", "medium", 0),
+            ("model-b-id", "medium", "medium", 0),
+            ("model-a", "xhigh", "low", 0),
+        ] {
+            composer.apply_agent_event_batch(vec![AgentEvent::ThreadSettingsUpdated(
+                AgentThreadSettings {
+                    model: model.into(),
+                    effort: Some(effort.into()),
+                    service_tier: None,
+                    cwd: "/work".into(),
+                    permissions: None,
+                },
+            )]);
+            assert_eq!(composer.request_effort(), expected);
+            assert_eq!(composer.conversation.slider_index, index);
+            assert_eq!(
+                composer.selected_effort_label(),
+                ComposerView::effort_label(expected)
+            );
+        }
+        let mut catalog = test_model_catalog();
+        catalog.models[0].supported_reasoning_efforts.clear();
+        catalog.models[0].default_reasoning_effort.clear();
+        composer.apply_model_catalog(catalog);
+        composer.apply_agent_event_batch(vec![AgentEvent::ThreadSettingsUpdated(
+            AgentThreadSettings {
+                model: "model-a".into(),
+                effort: Some("high".into()),
+                service_tier: None,
+                cwd: "/work".into(),
+                permissions: None,
+            },
+        )]);
+        assert!(composer.request_effort().is_empty());
+        assert!(composer.picker_shows_model_list());
+    });
+}
+
+#[test]
+fn restored_unknown_model_uses_its_thread_effort_in_the_picker() {
+    let mut app = TestApp::new();
+    let composer = app.new_entity(|cx| ComposerView::new(ThemeMode::Dark, cx));
+    app.update_entity(&composer, |composer, _| {
+        composer.apply_model_catalog(test_model_catalog());
+        composer.apply_agent_event_batch(vec![AgentEvent::ThreadSettingsUpdated(
+            crate::agent::AgentThreadSettings {
+                model: "retired-model".into(),
+                effort: Some("high".into()),
+                service_tier: None,
+                cwd: "/work".into(),
+                permissions: None,
+            },
+        )]);
+        assert!(composer.conversation.model_explicit);
+        assert_eq!(composer.conversation.slider_index, 3);
+        composer.set_slider_index(4);
+        assert_eq!(composer.request_effort(), "xhigh");
+        assert_eq!(composer.conversation.selected_model, "retired-model");
+    });
+}
+
+#[gpui::test]
+fn image_attachment_grows_the_composer_and_preview_and_remove_targets_work(
+    cx: &mut gpui::TestAppContext,
+) {
+    let path = PathBuf::from("/tmp/echora-preview-fixture.png");
+    let previewed = Arc::new(Mutex::new(Vec::new()));
+    let window = cx.add_window(|_, cx| {
+        let mut composer = ComposerView::new(ThemeMode::Dark, cx);
+        composer.prompt_context.files = vec![crate::agent::AgentInputFile {
+            path: path.clone(),
+            image: true,
+        }];
+        composer
+    });
+    let entity = cx.update(|cx| window.root(cx).unwrap());
+    cx.update(|cx| {
+        let previews = previewed.clone();
+        cx.subscribe(
+            &entity,
+            move |_, event: &super::OpenAttachmentPreview, _| {
+                previews.lock().unwrap().push(event.0.clone());
+            },
+        )
+        .detach();
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    let bounds = visual
+        .debug_bounds("COMPOSER_IMAGE_0")
+        .expect("thumbnail target");
+    assert_eq!(f32::from(bounds.size.width), 122.0);
+    assert_eq!(f32::from(bounds.size.height), 122.0);
+    let center = bounds.center();
+    visual.simulate_click(center, Default::default());
+    assert_eq!(*previewed.lock().unwrap(), vec![path]);
+    visual.simulate_mouse_move(
+        bounds.top_right() + point(px(-5.0), px(5.0)),
+        None,
+        Default::default(),
+    );
+    visual.simulate_click(
+        bounds.top_right() + point(px(-5.0), px(5.0)),
+        Default::default(),
+    );
+    entity.read_with(&visual, |composer, _| {
+        assert!(composer.prompt_context.files.is_empty())
+    });
+    assert_eq!(
+        previewed.lock().unwrap().len(),
+        1,
+        "remove must not open preview"
     );
 }
 
@@ -3031,7 +3211,7 @@ fn permission_menu_supports_trigger_and_menu_keyboard_navigation() {
     window.simulate_keystroke("end");
     assert_eq!(
         window.read(|composer, _| composer.permission_menu_focused_item),
-        3
+        2
     );
     window.simulate_keystroke("home");
     assert_eq!(
@@ -3085,7 +3265,7 @@ fn prompt_accepts_native_text_and_clears_without_a_stale_ime_range() {
 }
 
 #[test]
-fn model_picker_keyboard_navigation_enters_selects_and_escapes_submenus() {
+fn model_picker_keyboard_selects_a_model_keeps_the_menu_open_and_escapes() {
     let mut app = TestApp::new();
     let mut window = app.open_window_with_options(
         WindowOptions {
@@ -3103,20 +3283,75 @@ fn model_picker_keyboard_navigation_enters_selects_and_escapes_submenus() {
         window.focus(&composer.model_menu_focus, cx);
     });
     window.draw();
-    window.simulate_keystrokes("down right down enter");
+    window.simulate_keystrokes("down enter down enter");
     assert_eq!(
         window.read(|composer, _| composer.conversation.selected_model.clone()),
         "model-a"
     );
-    assert!(!window.read(|composer, _| composer.menu_open));
+    assert!(window.read(|composer, _| composer.menu_open));
 
     window.update(|composer, window, cx| {
         composer.open_picker(cx);
         window.focus(&composer.model_menu_focus, cx);
     });
     window.draw();
-    window.simulate_keystrokes("down right escape escape");
+    window.simulate_keystrokes("escape");
     assert!(!window.read(|composer, _| composer.menu_open));
+    window.update(|composer, window, _| {
+        assert!(composer.model_trigger_focus.is_focused(window));
+    });
+    window.simulate_keystrokes("enter");
+    assert!(window.read(|composer, _| composer.menu_open && !composer.model_list_open));
+}
+
+#[gpui::test]
+fn model_picker_trigger_closes_on_a_second_click_and_dismisses_outside(
+    cx: &mut gpui::TestAppContext,
+) {
+    let window = cx.add_window(|_, cx| {
+        let mut composer = ComposerView::new(ThemeMode::Dark, cx);
+        let mut catalog = test_model_catalog();
+        catalog.models[0].supported_reasoning_efforts =
+            catalog.models[1].supported_reasoning_efforts.clone();
+        catalog.models[0].default_reasoning_effort = "medium".into();
+        composer.apply_model_catalog(catalog);
+        composer
+    });
+    let entity = cx.update(|cx| window.root(cx).unwrap());
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    let trigger = visual
+        .debug_bounds("MODEL_PICKER_TRIGGER")
+        .unwrap()
+        .center();
+    visual.simulate_click(trigger, Default::default());
+    assert!(entity.read_with(&visual, |composer, _| composer.menu_open));
+    visual.simulate_click(trigger, Default::default());
+    assert!(!entity.read_with(&visual, |composer, _| composer.menu_open));
+    visual.simulate_click(trigger, Default::default());
+    assert!(entity.read_with(&visual, |composer, _| composer.menu_open));
+    visual.simulate_click(point(px(10.0), px(10.0)), Default::default());
+    assert!(!entity.read_with(&visual, |composer, _| composer.menu_open));
+
+    visual.simulate_click(trigger, Default::default());
+    let view_toggle = visual
+        .debug_bounds("MODEL_PICKER_VIEW_TOGGLE")
+        .unwrap()
+        .center();
+    visual.simulate_click(view_toggle, Default::default());
+    let model_row = visual
+        .debug_bounds("MODEL_PICKER_MODEL_1")
+        .unwrap()
+        .center();
+    visual.simulate_click(model_row, Default::default());
+    visual.update(|window, cx| {
+        assert!(entity.read(cx).model_menu_focus.is_focused(window));
+    });
+    visual.simulate_keystrokes("left");
+    assert_eq!(
+        entity.read_with(&visual, |composer, _| composer.request_effort()),
+        "medium"
+    );
 }
 
 #[test]
@@ -3577,52 +3812,4 @@ fn generation_rebuild_rejects_stale_permission_selection_before_catalog_reload()
         ));
         assert_eq!(composer.permission_mode, PermissionMode::Request);
     });
-}
-
-/// The "Advanced" toggle has no width of its own in the reference: it hugs the
-/// label, a 4px gap and the 12px chevron inside 8px of padding on each side.
-/// With the real UI font the two-character Chinese label makes it 58px wide; a
-/// fixed 58px used to cut "Advanced" short, so its hover plate ended before the
-/// last letters. The test platform has no CJK font, so only the relation between
-/// the languages is asserted here; the 58px itself is checked on the running app.
-#[gpui::test]
-fn advanced_toggle_hugs_its_label_in_every_language(cx: &mut gpui::TestAppContext) {
-    use crate::i18n::{Language, language, set_language};
-    struct RestoreLanguage(Language);
-    impl Drop for RestoreLanguage {
-        fn drop(&mut self) {
-            set_language(self.0);
-        }
-    }
-    let _restore = RestoreLanguage(language());
-
-    let window = cx.add_window(|_, cx| {
-        let mut composer = ComposerView::new(ThemeMode::Dark, cx);
-        composer.apply_model_catalog(test_model_catalog());
-        composer.menu_open = true;
-        composer
-    });
-    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-    let mut width_in = |language| {
-        set_language(language);
-        visual.update(|window, cx| window.draw(cx).clear(cx));
-        let toggle = visual
-            .debug_bounds("MODEL_PICKER_ADVANCED")
-            .expect("a default selection offers the Advanced toggle");
-        assert_eq!(f32::from(toggle.size.height), 32.0);
-        f32::from(toggle.size.width)
-    };
-
-    let chinese = width_in(Language::SimplifiedChinese);
-    let english = width_in(Language::English);
-    // "Advanced" is several times as wide as "高级" in any font, so a toggle
-    // that hugs its label grows by far more than the 20px asserted here; a fixed
-    // width keeps both equal.
-    assert!(
-        english - chinese > 20.0,
-        "the toggle must grow with its label: {chinese}px in Chinese, {english}px in English"
-    );
-    // 4px padding, 4px content padding, 4px gap and the 12px chevron around the
-    // label leave at least 28px that are not text.
-    assert!(english > 28.0 + 40.0, "English toggle is {english}px wide");
 }

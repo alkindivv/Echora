@@ -7,7 +7,7 @@ use gpui::{
 
 use super::{
     COMPOSER_CORNER_RADIUS, ComposerView, DictationState, MODEL_PICKER_TRIGGER_GAP,
-    MODEL_PICKER_WIDTH, WorkspacePresentation,
+    WorkspacePresentation,
 };
 use crate::{
     components::icons::icon,
@@ -33,12 +33,12 @@ impl ComposerView {
         let fast_tier_selected = self.conversation.selected_service_tier.is_some();
         let composer_width = self.available_width.unwrap_or(viewport_width);
         let compact = composer_width < 430.0;
+        let model_trigger_bounds = self.model_trigger_bounds.clone();
         let trigger_label = div()
             .min_w(px(0.0))
             .flex()
             .items_center()
             .gap(px(MODEL_PICKER_TRIGGER_GAP))
-            .when(self.menu_open, |label| label.flex_1().justify_center())
             .child(
                 div()
                     .min_w(px(0.0))
@@ -46,39 +46,36 @@ impl ComposerView {
                         d.max_w(px((composer_width - 202.0).max(42.0))).truncate()
                     })
                     .text_color(theme.text)
-                    .child(effective_model_label),
-            )
-            .when(!compact, |d| {
-                d.child(
-                    div()
-                        .text_color(if model_status_active {
-                            theme.effort
+                    .child(if self.menu_open && !self.picker_shows_model_list() {
+                        crate::i18n::text(if self.conversation.model_explicit {
+                            "选择推理强度"
                         } else {
-                            theme.text_tertiary
+                            "选择模型"
                         })
-                        .child(effort_or_status_label),
-                )
-            });
+                        .to_owned()
+                    } else {
+                        effective_model_label
+                    }),
+            )
+            .when(
+                !compact && (!self.menu_open || self.picker_shows_model_list()),
+                |d| {
+                    d.child(
+                        div()
+                            .text_color(if model_status_active {
+                                theme.effort
+                            } else {
+                                theme.text_tertiary
+                            })
+                            .child(effort_or_status_label),
+                    )
+                },
+            );
         let trigger_value = div()
             .min_w(px(0.0))
             .flex()
             .items_center()
-            .when(self.menu_open, |value| {
-                value.flex_1().child(
-                    div()
-                        .w(px(18.0))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when(fast_tier_selected, |indicator| {
-                            indicator.child(icon("model-fast", theme.text.into()).size(px(14.0)))
-                        }),
-                )
-            })
-            .when(!self.menu_open && fast_tier_selected, |value| {
-                // ChatGPT CDP: the closed trigger uses a 14px fast glyph with
-                // exactly 4px between its right edge and the model label.
+            .when(fast_tier_selected, |value| {
                 value
                     .gap(px(MODEL_PICKER_TRIGGER_GAP))
                     .child(icon("model-fast", theme.text.into()).size(px(14.0)))
@@ -196,7 +193,7 @@ impl ComposerView {
                     .font_weight(gpui::FontWeight::NORMAL)
                     .px(px(8.0))
                     .py(px(12.0))
-                    .pt(px(14.0)).pb(px(8.0))
+                    .pt(px(if self.prompt_context.files.iter().any(|file| file.image) { 8.0 } else { 14.0 })).pb(px(8.0))
                     .when(!self.prompt_context.files.is_empty(), |d| d.child(self.render_attachments(theme, cx)))
                     .when(!self.review_comments.is_empty(), |d| {
                         d.child(
@@ -310,7 +307,7 @@ impl ComposerView {
                                                         cx.listener(|this, _, window, cx| {
                                                             cx.stop_propagation();
                                                             this.menu_open = false;
-                                                            this.submenu = None;
+                                                            this.model_list_open = false;
                                                             this.permission_menu_open =
                                                                 !this.permission_menu_open;
                                                             this.permission_menu_keyboard_focus =
@@ -355,13 +352,16 @@ impl ComposerView {
                                         .child(
                                             div()
                                                 .id("composer-model-picker")
+                                                .debug_selector(|| "MODEL_PICKER_TRIGGER".to_owned())
+                                                .relative()
                                                 .role(gpui::Role::Button)
                                                 .aria_label(crate::i18n::text("选择模型和思考强度"))
-                                                .focusable()
+                                                .track_focus(&self.model_trigger_focus)
                                                 .tab_stop(true)
                                                 .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                                                     if !this.menu_open && matches!(event.keystroke.key.as_str(), "enter" | "space" | "down") {
                                                         this.menu_open = true;
+                                                        this.model_list_open = false;
                                                         this.permission_menu_open = false;
                                                         this.model_menu_focused_item = 0;
                                                         this.model_menu_keyboard_focus = true;
@@ -373,9 +373,6 @@ impl ComposerView {
                                                 .h(px(28.0))
                                                 .px(px(8.0))
                                                 .rounded_full()
-                                                .when(self.menu_open, |button| {
-                                                    button.w(px(if compact { MODEL_PICKER_WIDTH.min((composer_width - 140.0).max(84.0)) } else { MODEL_PICKER_WIDTH })).flex_none()
-                                                })
                                                 .flex()
                                                 .items_center()
                                                 .gap(px(4.0))
@@ -392,21 +389,24 @@ impl ComposerView {
                                                     this.permission_menu_keyboard_focus = false;
                                                     this.menu_open = !this.menu_open;
                                                     if !this.menu_open {
-                                                        this.submenu = None;
+                                                        this.model_list_open = false;
+                                                        this.model_trigger_focus.focus(window, cx);
                                                     } else {
                                                         this.model_menu_keyboard_focus = false;
-                                                        this.submenu_keyboard_focus = false;
+                                                        this.model_list_open = false;
                                                         window.focus(&this.model_menu_focus, cx);
                                                     }
                                                     cx.notify();
                                                 }))
                                                 .child(trigger_value)
+                                                .child(canvas(move |bounds, _, _| model_trigger_bounds.set(Some(bounds)), |_, (), _, _| {})
+                                                    .absolute().inset_0().size_full())
                                                 .child(
                                                     icon(
                                                         "chevron-down",
                                                         theme.text_tertiary.into(),
                                                     )
-                                                    .size(px(14.0)),
+                                                    .size(px(12.0)),
                                                 ),
                                         )
                                         .child(
@@ -857,6 +857,9 @@ pub(super) fn context_toolbar(workspace: &WorkspacePresentation, theme: Theme) -
 
 impl Render for ComposerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.menu_open && self.model_ultra_warning_visible() {
+            window.request_animation_frame();
+        }
         if self.focus_prompt_pending {
             self.prompt_focus_handle(cx).focus(window, cx);
             self.focus_prompt_pending = false;

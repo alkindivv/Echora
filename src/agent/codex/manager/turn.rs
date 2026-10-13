@@ -398,7 +398,10 @@ pub(super) fn build_turn_start_params(
         params.insert("effort".into(), Value::Null);
     } else {
         params.insert("model".into(), json!(request.model));
-        params.insert("effort".into(), json!(request.effort));
+        params.insert(
+            "effort".into(),
+            json!((!request.effort.is_empty()).then_some(&request.effort)),
+        );
     }
     if is_new_thread {
         let PermissionFields {

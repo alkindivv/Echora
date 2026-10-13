@@ -338,9 +338,9 @@ Hook 字段范围：eventName 支持 preToolUse、permissionRequest、postToolUs
 | `memory/reset` | 实验 | 已接入 | 与参考一致不带 params；个性化设置「删除」先确认，成功／失败分别提示，不伪造成功。 | `manager/features`、`settings/view/memories` |
 | `memory/status` | 实验 | 已接入 | `{minConsolidatedThreads:20}`；个性化设置（记忆开启时）的「记忆整合」行与 `/memories` 对话框底部显示「已就绪 · 已整合 N 个聊天」或「尚未就绪 · 已整合 N/20 个聊天」；按 generation 丢弃迟到回执，失败不显示该行。参考只在 Statsig 放行时作为 thread/start 前的探测，不展示，此处为 Echora 新增展示。 | `manager/features`、`conversation/memory` |
 | `mock/experimentalMethod` | 实验 | 未接入 | — | — |
-| `model/list` | 默认 | 已接入 | limit=50、includeHidden=false；遍历 nextCursor，拒绝循环游标；返回模型、默认值、推理强度及服务档位。 | `manager/catalog` |
+| `model/list` | 默认 | 已接入 | limit=50、includeHidden=false；遍历 nextCursor，拒绝循环游标；返回模型、默认值、推理强度及服务档位；Composer 按模型实际档位显示滑块，目录外的已配置／恢复模型保留并提供六档后备值，零／单档显示模型列表。 | `manager/catalog` |
 | `modelProvider/capabilities/read` | 默认 | 已接入 | params `{}`，随配置读取与权限目录按 generation 读取；webSearch=false 时「网页搜索」只可选关闭并说明「当前模型提供方不支持网页搜索」，imageGeneration=false 时隐藏图片生成失败后的重试；namespaceTools 只保存。读取失败视为未知、不做门控。参考不读取响应字段，此处为 Echora 新增门控。 | `manager/catalog`、`settings/view/configuration` |
-| `permissionProfile/list` | 默认 | 已接入 | cwd、limit=100、遍历 nextCursor，拒绝循环游标及重复 id；消费 id/allowed/description，兼容可选 extends；设置和权限菜单展示，提交前复核 allowed。 | `manager/catalog`、`catalog` |
+| `permissionProfile/list` | 默认 | 已接入 | cwd、limit=100、遍历 nextCursor，拒绝循环游标及重复 id；消费 id/allowed/description，兼容可选 extends；设置展示 profile，Composer 菜单仅列三种权限模式并据目录判定禁用原因，提交前复核 allowed。 | `manager/catalog`、`catalog` |
 | `plugin/install` | 默认 | 已接入 | pluginName + marketplacePath/remoteMarketplaceName（未用一侧显式 null），可选 installAttemptId；120s 操作窗口，成功回执保留 authPolicy 与 appsNeedingAuth；超时与不可读结果分别建模为 TimedOut/Unknown，不自动重试。 | `manager/plugins`、`plugins_catalog` |
 | `plugin/installed` | 默认 | 已接入 | cwds 与 installSuggestionPluginNames；与 `plugin/list` 分别缓存，安装开关状态以该响应为准。 | `manager/plugins`、`plugins` |
 | `plugin/list` | 默认 | 已接入 | cwds、forceRefetch、marketplaceKinds（浏览目录时请求全部类型）；保留 marketplaceLoadErrors、featuredPluginIds、interface、source 四种变体与未知字段；行内容与分段徽标计数均来自该响应。 | `manager/plugins`、`plugins` |
@@ -432,7 +432,7 @@ Hook 字段范围：eventName 支持 preToolUse、permissionRequest、postToolUs
 | `threadSection/update` | 默认 | 已接入 | 「编辑分区」对话框只发送 `{sectionId,name}`（不发 appearance，服务端保留原样），空名不可保存；回执 id 不符视为协议错误。 | `manager/workspace`、`workspace/sections` |
 | `turn/interrupt` | 默认 | 已接入 | 定向 threadId/turnId，每轮最多发送一次；等待真实 interrupted 终态，保持共享连接。 | `manager/turn` |
 | `turn/settings/update` | 实验 | 已接入 | 线程权限更新成功后，若该线程有唯一进行中的轮次且本次带 approvalsReviewer，在同一串行队列里发送 `{threadId,turnId,approvalsReviewer}`；applied 与 targetUnavailable 严格解码，失败只影响当前轮次并提示从下一轮生效。 | `manager/settings`、`turn_settings` |
-| `turn/start` | 默认 | 已接入 | 文本及 localImage 输入、路径上下文、model/effort/serviceTier；选择 plan/default 时 collaborationMode 由本 generation 的预设生成、顶层 model/effort 为 null；新线程首轮附权限字段。可选 clientUserMessageId；以 result.turn.id 建立轮次归属。 | `manager/turn`、`input`、`collaboration` |
+| `turn/start` | 默认 | 已接入 | 文本及 localImage 输入、路径上下文、model/effort/serviceTier；模型没有推理强度时 effort 及 collaborationMode.settings.reasoning_effort 为 null；选择 plan/default 时 collaborationMode 由本 generation 的预设生成、顶层 model/effort 为 null；新线程首轮附权限字段。可选 clientUserMessageId；以 result.turn.id 建立轮次归属。 | `manager/turn`、`input`、`collaboration` |
 | `turn/steer` | 默认 | 已接入 | 主会话／临时侧边聊天运行中即时追加：threadId、expectedTurnId、input、clientUserMessageId；校验 result.turnId。复用文本、localImage、文件路径上下文及审查评论编码；不传 model/cwd/权限等轮次覆盖字段。 | `manager/steer`、`input` |
 | `userVerification/cancel` | 实验 | 未接入 | — | — |
 | `userVerification/delete` | 实验 | 未接入 | — | — |

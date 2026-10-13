@@ -47,6 +47,11 @@ use crate::{
 };
 
 impl ComposerView {
+    #[cfg(feature = "screenshot")]
+    pub fn attach_files_for_capture(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        self.attach_paths(paths, cx);
+    }
+
     #[cfg(test)]
     pub(crate) fn apply_events_for_capture(
         &mut self,
@@ -113,7 +118,7 @@ impl ComposerView {
     pub fn open_permission_menu_for_capture(&mut self, cx: &mut Context<Self>) {
         self.permission_ui_enabled = true;
         self.menu_open = false;
-        self.submenu = None;
+        self.model_list_open = false;
         self.permission_menu_keyboard_focus = false;
         self.permission_menu_open = true;
         cx.notify();

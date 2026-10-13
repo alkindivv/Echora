@@ -23,7 +23,7 @@ impl ComposerView {
         self.dictation_cycle = self.dictation_cycle.wrapping_add(1);
         self.dictation_state = DictationState::Recording;
         self.menu_open = false;
-        self.submenu = None;
+        self.model_list_open = false;
         cx.notify();
     }
     pub(super) fn cancel_dictation(&mut self, cx: &mut Context<Self>) {

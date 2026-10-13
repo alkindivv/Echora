@@ -1385,6 +1385,14 @@ fn main() {
         options_open: activity_options_open,
         tooltip: activity_tooltip,
     });
+    #[cfg(feature = "screenshot")]
+    let composer_attachments: Vec<PathBuf> = args
+        .iter()
+        .filter_map(|arg| {
+            arg.strip_prefix("--composer-attachment=")
+                .map(PathBuf::from)
+        })
+        .collect();
     let model_picker_open = args.iter().any(|arg| arg == "--model-picker-open");
     let model_picker_submenu = args.iter().find_map(|arg| {
         arg.strip_prefix("--model-picker-submenu=")
@@ -1734,6 +1742,10 @@ fn main() {
                         }
                         if let Some(request) = activity_capture.clone() {
                             app.capture_activity(request, cx);
+                        }
+                        #[cfg(feature = "screenshot")]
+                        if !composer_attachments.is_empty() {
+                            app.attach_composer_files_for_capture(composer_attachments.clone(), cx);
                         }
                         if model_picker_open {
                             app.open_model_picker(cx);

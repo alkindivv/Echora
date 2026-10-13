@@ -411,7 +411,10 @@ pub(super) fn drive_session<R: BufRead, W: Write + Send + 'static>(
         json!([{ "type": "text", "text": request.prompt }]),
     );
     turn_params.insert("model".into(), json!(request.model));
-    turn_params.insert("effort".into(), json!(request.effort));
+    turn_params.insert(
+        "effort".into(),
+        json!((!request.effort.is_empty()).then_some(&request.effort)),
+    );
     turn_params.insert("serviceTier".into(), json!(request.service_tier));
     if is_new_thread {
         let PermissionFields {

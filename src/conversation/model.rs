@@ -3,6 +3,14 @@
 use super::state::ConversationState;
 use crate::agent::{AgentModel, AgentModelCatalog};
 
+/// The power steps ChatGPT offers for a configured model the catalog does not
+/// list: it labels such a model "Custom" and still lets the effort change.
+pub(crate) const FALLBACK_REASONING_EFFORTS: [&str; 6] =
+    ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// Effort assumed for a model outside the catalog when nothing names one.
+const FALLBACK_DEFAULT_EFFORT: &str = "medium";
+
 impl ConversationState {
     pub(crate) fn apply_config_defaults(&mut self, config: &crate::agent::AgentConfigSnapshot) {
         if self.thread_id.is_some() || self.model_user_selected || self.user_message.is_some() {
@@ -17,7 +25,9 @@ impl ConversationState {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned)
         };
-        self.selected_model = string("model")
+        let configured_model = string("model");
+        self.model_explicit = configured_model.is_some();
+        self.selected_model = configured_model
             .or_else(|| {
                 self.models
                     .iter()
@@ -26,26 +36,14 @@ impl ConversationState {
                     .map(|model| model.model.clone())
             })
             .unwrap_or_default();
-        self.selected_effort = string("model_reasoning_effort")
-            .or_else(|| {
-                self.selected_model_entry()
-                    .map(|model| model.default_reasoning_effort.clone())
-            })
-            .unwrap_or_default();
+        self.selected_effort = self.resolve_effort_for_selection(string("model_reasoning_effort"));
         self.selected_service_tier = string("service_tier");
         self.plan_default_effort = config
             .effective
             .get("plan_mode_reasoning_effort")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
-        if let Some(index) = self.selected_model_entry().and_then(|model| {
-            model
-                .supported_reasoning_efforts
-                .iter()
-                .position(|effort| effort.id == self.selected_effort)
-        }) {
-            self.slider_index = index;
-        }
+        self.sync_slider_index();
     }
 
     pub(crate) fn apply_model_catalog(&mut self, catalog: AgentModelCatalog) {
@@ -60,30 +58,92 @@ impl ConversationState {
             return;
         }
 
-        let selected_index = self
+        if let Some(index) = self
             .models
             .iter()
-            .position(|model| model.model == previous_model)
-            .or_else(|| self.models.iter().position(|model| model.is_default))
+            .position(|model| model.model == previous_model || model.id == previous_model)
+        {
+            self.apply_model_selection(index, Some(previous_effort), previous_service_tier, true);
+        } else if !previous_model.is_empty() {
+            // A configured or resumed model the catalog does not list stays
+            // selected, as ChatGPT keeps it ("Custom") instead of silently
+            // switching the request to another model.
+            if self.selected_effort.is_empty() {
+                self.selected_effort = self.default_effort_for_selection();
+            }
+            self.sync_slider_index();
+        } else {
+            let index = self
+                .models
+                .iter()
+                .position(|model| model.is_default)
+                .unwrap_or(0);
+            self.apply_model_selection(index, None, None, false);
+        }
+    }
+
+    /// Reasoning efforts the slider offers for the current selection: the
+    /// catalog entry's own list, or ChatGPT's fallback steps for a model the
+    /// catalog does not list.
+    pub(crate) fn effort_ids(&self) -> Vec<String> {
+        match self.selected_model_entry() {
+            Some(model) => model
+                .supported_reasoning_efforts
+                .iter()
+                .map(|effort| effort.id.clone())
+                .collect(),
+            None if !self.selected_model.is_empty() => FALLBACK_REASONING_EFFORTS
+                .iter()
+                .map(|effort| (*effort).to_owned())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    pub(crate) fn sync_slider_index(&mut self) {
+        self.slider_index = self
+            .effort_ids()
+            .iter()
+            .position(|effort| *effort == self.selected_effort)
             .unwrap_or(0);
-        let preserve_options = self.models[selected_index].model == previous_model;
-        self.apply_model_selection(
-            selected_index,
-            preserve_options.then_some(previous_effort),
-            preserve_options.then_some(previous_service_tier).flatten(),
-            preserve_options,
-        );
+    }
+
+    pub(crate) fn default_effort_for_selection(&self) -> String {
+        match self.selected_model_entry() {
+            Some(model) => model
+                .supported_reasoning_efforts
+                .iter()
+                .find(|effort| effort.id == model.default_reasoning_effort)
+                .or_else(|| model.supported_reasoning_efforts.first())
+                .map(|effort| effort.id.clone())
+                .unwrap_or_else(|| model.default_reasoning_effort.clone()),
+            None if !self.selected_model.is_empty() => FALLBACK_DEFAULT_EFFORT.to_owned(),
+            None => String::new(),
+        }
+    }
+
+    /// A catalog model must use one of its advertised efforts. Configuration
+    /// and restored settings may name a step that a different model supported.
+    /// Keep an unknown model's configured effort until its capabilities arrive.
+    pub(crate) fn resolve_effort_for_selection(&self, preferred: Option<String>) -> String {
+        preferred
+            .filter(|effort| {
+                !effort.is_empty()
+                    && self.selected_model_entry().is_none_or(|model| {
+                        model
+                            .supported_reasoning_efforts
+                            .iter()
+                            .any(|option| option.id == *effort)
+                    })
+            })
+            .unwrap_or_else(|| self.default_effort_for_selection())
     }
     pub(crate) fn set_model_catalog_error(&mut self, error: String) {
         self.models.clear();
         self.model_catalog_error = Some(error);
-        self.selected_model.clear();
-        self.selected_effort.clear();
-        self.selected_service_tier = None;
-        self.actual_model = None;
-        self.model_status = None;
-        self.safety_buffering = false;
-        self.slider_index = 0;
+        // A failed catalog read must not replace an existing thread/config
+        // selection. It can still use the configured model and fallback steps.
+        self.sync_slider_index();
     }
     pub(crate) fn apply_model_selection(
         &mut self,
@@ -96,27 +156,7 @@ impl ConversationState {
             return;
         };
         self.selected_model = model.model;
-        self.selected_effort = preferred_effort
-            .filter(|effort| {
-                model
-                    .supported_reasoning_efforts
-                    .iter()
-                    .any(|option| option.id == *effort)
-            })
-            .or_else(|| {
-                model
-                    .supported_reasoning_efforts
-                    .iter()
-                    .any(|option| option.id == model.default_reasoning_effort)
-                    .then(|| model.default_reasoning_effort.clone())
-            })
-            .or_else(|| {
-                model
-                    .supported_reasoning_efforts
-                    .first()
-                    .map(|option| option.id.clone())
-            })
-            .unwrap_or_else(|| model.default_reasoning_effort.clone());
+        self.selected_effort = self.resolve_effort_for_selection(preferred_effort);
 
         self.selected_service_tier = if preserve_standard_tier && preferred_service_tier.is_none() {
             None
@@ -141,7 +181,7 @@ impl ConversationState {
     pub(crate) fn selected_model_entry(&self) -> Option<&AgentModel> {
         self.models
             .iter()
-            .find(|model| model.model == self.selected_model)
+            .find(|model| model.model == self.selected_model || model.id == self.selected_model)
     }
     pub(crate) fn model_display_name<'a>(&'a self, model_name: &'a str) -> &'a str {
         self.models
@@ -219,6 +259,8 @@ mod config_default_tests {
         };
         state.apply_config_defaults(&config);
         assert_eq!(state.selected_model, "configured");
+        assert_eq!(state.selected_effort, "medium");
+        assert_eq!(state.slider_index, 0);
         config.effective = serde_json::json!({"model":null,"model_reasoning_effort":null});
         state.apply_config_defaults(&config);
         assert_eq!(state.selected_model, "catalog-default");

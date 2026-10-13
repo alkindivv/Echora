@@ -1,24 +1,110 @@
 //! Picker behavior and presentation for the prompt composer.
+//!
+//! The picker follows ChatGPT 26.1007's model picker: a trigger that reads
+//! "<model> <effort>", and a 254px popup centred above it with two views. The
+//! slider view shows the selection above a power slider; the model view lists
+//! "Default" and the catalog's models.
 
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, BoxShadow, Context, Div, KeyDownEvent, MouseButton, Transformation,
-    Window, deferred, div, hsla, linear_color_stop, linear_gradient, prelude::*, px, radians, rgba,
+    Animation, AnimationExt, BoxShadow, Context, Div, KeyDownEvent, MouseButton, SharedString,
+    Window, div, hsla, linear_color_stop, linear_gradient, prelude::*, px, rgba,
 };
 
 use super::{
-    ComposerView, MODEL_PICKER_DETAIL_ROW_HEIGHT, MODEL_PICKER_RIGHT_INSET,
-    MODEL_PICKER_ROW_HEIGHT, MODEL_PICKER_SUBMENU_BOTTOM_OFFSET, MODEL_PICKER_SUBMENU_GAP,
-    MODEL_PICKER_SUBMENU_HEADER_HEIGHT, MODEL_PICKER_SUBMENU_MAX_HEIGHT,
-    MODEL_PICKER_SUBMENU_VERTICAL_PADDING, MODEL_PICKER_WIDTH, PARTICLE_TIMELINE_MS, PickerSubmenu,
-    layout::{max_particle_drift, particle_layers, submenu_layout},
+    ComposerView, MODEL_PICKER_MENU_GAP, MODEL_PICKER_WIDTH, PARTICLE_TIMELINE_MS, TrayTooltip,
+    layout::{max_particle_drift, particle_layers},
 };
 use crate::{
     agent::{AgentModel, AgentModelCatalog},
     components::icons::icon,
-    theme::Theme,
+    theme::{Theme, ThemeMode, ui_font},
 };
+
+/// `--color-chart-blue`: the slider range, accented effort and Fast toggle.
+/// ChatGPT uses the same value in both themes.
+const CHART_BLUE: u32 = 0x339cffff;
+/// Menu rows are `text-sm` (13/18.57) with 5px block padding.
+const ROW_LINE_HEIGHT: f32 = 18.5714;
+const ROW_HEIGHT: f32 = 5.0 + ROW_LINE_HEIGHT + 5.0;
+/// The "Default" row adds a 16px description line.
+const DEFAULT_ROW_HEIGHT: f32 = ROW_HEIGHT + 16.0;
+/// The model list keeps the popup inside the window like Radix's collision
+/// handling does for long catalogs.
+const MODEL_LIST_MAX_HEIGHT: f32 = 420.0;
+
+/// One focusable control of the slider view, in keyboard order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PickerControl {
+    ViewToggle,
+    Reset,
+    Fast,
+    Slider,
+}
+
+/// ChatGPT's display-name formatting for the picker (`stripGptPrefix`):
+/// "GPT-6.1-Sol" reads "6.1 Sol" and "GPT-5.5" reads "5.5"; names that do not
+/// start with "gpt" are shown unchanged.
+pub(super) fn short_model_label(name: &str) -> String {
+    let trimmed = name.trim_start();
+    if !trimmed.to_lowercase().starts_with("gpt") {
+        return name.to_owned();
+    }
+    let lower = trimmed.to_lowercase();
+    let versioned = lower.starts_with("gpt-")
+        && lower[4..]
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit());
+    let separator = if versioned { " " } else { "-" };
+    let mut formatted = String::new();
+    let mut rest = name;
+    while !rest.is_empty() {
+        let split = rest
+            .find(|character: char| {
+                character.is_whitespace() != rest.starts_with(char::is_whitespace)
+            })
+            .unwrap_or(rest.len());
+        let (piece, tail) = rest.split_at(split);
+        rest = tail;
+        if piece.trim().is_empty() {
+            formatted.push_str(piece);
+            continue;
+        }
+        let joined = piece
+            .split('-')
+            .enumerate()
+            .map(|(index, word)| {
+                if word.eq_ignore_ascii_case("gpt") {
+                    "GPT".to_owned()
+                } else if word.eq_ignore_ascii_case("oai") {
+                    "OAI".to_owned()
+                } else if index > 0 && !word.is_empty() {
+                    let mut characters = word.chars();
+                    characters
+                        .next()
+                        .map(|first| first.to_uppercase().chain(characters).collect())
+                        .unwrap_or_default()
+                } else {
+                    word.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(separator);
+        match joined.strip_prefix("GPT ") {
+            Some(tail) if tail.starts_with(|character: char| character.is_ascii_digit()) => {
+                formatted.push_str("GPT-");
+                formatted.push_str(tail);
+            }
+            _ => formatted.push_str(&joined),
+        }
+    }
+    match formatted.get(..4) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("gpt-") => formatted[4..].to_owned(),
+        _ => formatted,
+    }
+}
 
 impl ComposerView {
     pub(super) fn apply_model_catalog(&mut self, catalog: AgentModelCatalog) {
@@ -42,33 +128,32 @@ impl ComposerView {
             preserve_standard_tier,
         )
     }
+    /// Choosing a model in the list makes it the explicit selection and, as
+    /// in ChatGPT, keeps the current effort and speed when the model offers
+    /// them.
     pub(super) fn select_model_at(&mut self, index: usize) {
-        self.apply_model_selection(index, None, None, false);
+        self.model_ultra_warning_until = None;
+        let effort = self.request_effort();
+        let service_tier = self.conversation.selected_service_tier.clone();
+        self.apply_model_selection(index, Some(effort), service_tier, true);
+        self.conversation.model_explicit = true;
+    }
+    /// "Default" and "Reset to default" return to the catalog default model
+    /// with its advertised effort and speed.
+    pub(super) fn select_default_model(&mut self) {
+        self.model_ultra_warning_until = None;
+        if let Some(index) = self.default_model_index() {
+            self.apply_model_selection(index, None, None, false);
+        }
+        self.conversation.model_explicit = false;
     }
     pub(super) fn select_effort_at(&mut self, index: usize) {
-        let Some(effort) = self
-            .selected_model_entry()
-            .and_then(|model| model.supported_reasoning_efforts.get(index))
-            .map(|effort| effort.id.clone())
-        else {
+        let Some(effort) = self.conversation.effort_ids().into_iter().nth(index) else {
             return;
         };
         self.conversation.model_user_selected = true;
         self.conversation.selected_effort = effort;
         self.conversation.slider_index = index;
-        self.conversation.actual_model = None;
-        self.conversation.model_status = None;
-        self.conversation.safety_buffering = false;
-    }
-    pub(super) fn select_service_tier_at(&mut self, index: usize) {
-        self.conversation.model_user_selected = true;
-        self.conversation.selected_service_tier = if index == 0 {
-            None
-        } else {
-            self.selected_model_entry()
-                .and_then(|model| model.service_tiers.get(index - 1))
-                .map(|tier| tier.id.clone())
-        };
         self.conversation.actual_model = None;
         self.conversation.model_status = None;
         self.conversation.safety_buffering = false;
@@ -79,36 +164,38 @@ impl ComposerView {
     pub(super) fn model_display_name<'a>(&'a self, model_name: &'a str) -> &'a str {
         self.conversation.model_display_name(model_name)
     }
+    /// The trigger's model label: the formatted catalog name, ChatGPT's
+    /// "Custom" for a configured model the catalog does not list, or the
+    /// unavailable state when there is no model at all.
     pub(super) fn selected_model_label(&self) -> String {
         if self.conversation.selected_model.is_empty() {
             crate::i18n::text("模型不可用").to_owned()
+        } else if let Some(model) = self.selected_model_entry() {
+            short_model_label(&model.display_name)
         } else {
-            self.model_display_name(&self.conversation.selected_model)
-                .to_owned()
+            crate::i18n::text("自定义").to_owned()
         }
     }
     pub(super) fn effective_model_label(&self) -> String {
-        self.conversation
-            .actual_model
-            .as_deref()
-            .map(|model| self.model_display_name(model).to_owned())
-            .unwrap_or_else(|| self.selected_model_label())
+        match self.conversation.actual_model.as_deref() {
+            Some(model) if model != self.conversation.selected_model => {
+                short_model_label(self.model_display_name(model))
+            }
+            _ => self.selected_model_label(),
+        }
     }
     pub(super) fn effort_label(effort: &str) -> &str {
         match effort {
             "none" => crate::i18n::text("无"),
-            "minimal" => crate::i18n::text("最小"),
+            "minimal" => crate::i18n::text("极低"),
             "low" => crate::i18n::text("轻度"),
             "medium" => crate::i18n::text("中"),
             "high" => crate::i18n::text("高"),
             "xhigh" => crate::i18n::text("极高"),
-            "max" => crate::i18n::text("最高"),
+            "max" => "Max",
             "ultra" => "Ultra",
             other => other,
         }
-    }
-    pub(super) fn effort_detail(effort: &str) -> Option<&'static str> {
-        (effort == "ultra").then_some(crate::i18n::text("更快消耗使用额度"))
     }
     pub(super) fn selected_effort_label(&self) -> String {
         let effort = self.request_effort();
@@ -118,15 +205,6 @@ impl ComposerView {
             Self::effort_label(&effort).to_owned()
         }
     }
-    pub(super) fn selected_service_tier_label(&self) -> String {
-        let Some(selected) = self.conversation.selected_service_tier.as_deref() else {
-            return crate::i18n::text("标准").to_owned();
-        };
-        self.selected_model_entry()
-            .and_then(|model| model.service_tiers.iter().find(|tier| tier.id == selected))
-            .map(|tier| tier.name.clone())
-            .unwrap_or_else(|| selected.to_owned())
-    }
     pub(super) fn default_model_index(&self) -> Option<usize> {
         self.conversation
             .models
@@ -134,52 +212,13 @@ impl ComposerView {
             .position(|model| model.is_default)
             .or((!self.conversation.models.is_empty()).then_some(0))
     }
-    pub(super) fn selection_is_default(&self) -> bool {
-        let Some(model) = self
-            .default_model_index()
-            .and_then(|index| self.conversation.models.get(index))
-        else {
-            return true;
-        };
-        let default_effort = model
-            .supported_reasoning_efforts
-            .iter()
-            .find(|option| option.id == model.default_reasoning_effort)
-            .or_else(|| model.supported_reasoning_efforts.first())
-            .map(|option| option.id.as_str())
-            .unwrap_or(model.default_reasoning_effort.as_str());
-        let default_service_tier = model
-            .default_service_tier
-            .as_deref()
-            .filter(|tier| model.service_tiers.iter().any(|option| option.id == *tier));
-
-        self.conversation.selected_model == model.model
-            && self.conversation.selected_effort == default_effort
-            && self.conversation.selected_service_tier.as_deref() == default_service_tier
-    }
     pub(super) fn reset_model_selection(&mut self) {
-        if let Some(index) = self.default_model_index() {
-            self.apply_model_selection(index, None, None, false);
-        }
-        self.advanced_expanded = false;
-        self.submenu = None;
-        self.submenu_keyboard_focus = false;
+        self.select_default_model();
+        self.model_list_open = false;
         self.slider_dragging = false;
     }
-    pub(super) fn submenu_option_count(&self, submenu: PickerSubmenu) -> usize {
-        match submenu {
-            PickerSubmenu::Model => self.conversation.models.len(),
-            PickerSubmenu::Effort => self
-                .selected_model_entry()
-                .map(|model| model.supported_reasoning_efforts.len())
-                .unwrap_or(0),
-            PickerSubmenu::ServiceTier => self
-                .selected_model_entry()
-                .map(|model| model.service_tiers.len() + 1)
-                .unwrap_or(0),
-        }
-    }
     pub(super) fn toggle_accelerated_service_tier(&mut self) {
+        let effort = self.request_effort();
         if self.conversation.selected_service_tier.is_some() {
             self.conversation.selected_service_tier = None;
         } else {
@@ -188,124 +227,158 @@ impl ComposerView {
                 .and_then(|model| model.service_tiers.first())
                 .map(|tier| tier.id.clone());
         }
+        self.conversation.selected_effort = effort;
+        self.conversation.sync_slider_index();
+        self.conversation.model_user_selected = true;
         self.conversation.actual_model = None;
         self.conversation.model_status = None;
         self.conversation.safety_buffering = false;
     }
+    /// ChatGPT offers Fast only for a model with a faster service tier served
+    /// by the OpenAI provider; a custom provider never shows the toggle.
+    pub(super) fn fast_mode_available(&self) -> bool {
+        let openai_provider = self
+            .permission_config
+            .as_ref()
+            .and_then(|config| config.effective.get("model_provider"))
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|provider| provider == "openai");
+        openai_provider
+            && self
+                .selected_model_entry()
+                .is_some_and(|model| !model.service_tiers.is_empty())
+    }
+    /// With fewer than two power steps there is nothing to slide, so the
+    /// popup opens on the model list, as ChatGPT does.
+    pub(super) fn picker_shows_model_list(&self) -> bool {
+        self.model_list_open || self.conversation.effort_ids().len() < 2
+    }
+    pub(super) fn picker_controls(&self) -> Vec<PickerControl> {
+        let mut controls = vec![PickerControl::ViewToggle];
+        if self.conversation.model_explicit {
+            controls.push(PickerControl::Reset);
+        }
+        if self.fast_mode_available() {
+            controls.push(PickerControl::Fast);
+        }
+        controls.push(PickerControl::Slider);
+        controls
+    }
+    fn focused_picker_control(&self) -> Option<PickerControl> {
+        if !self.model_menu_keyboard_focus || self.picker_shows_model_list() {
+            return None;
+        }
+        self.picker_controls()
+            .get(self.model_menu_focused_item)
+            .copied()
+    }
+    /// Rows of the model view: "Default" followed by the catalog.
+    fn model_list_len(&self) -> usize {
+        1 + self.conversation.models.len()
+    }
+    fn picker_item_count(&self) -> usize {
+        if self.picker_shows_model_list() {
+            self.model_list_len()
+        } else {
+            self.picker_controls().len()
+        }
+    }
+    fn show_model_list(&mut self, open: bool) {
+        self.model_ultra_warning_until = None;
+        self.model_list_open = open;
+        self.slider_dragging = false;
+        self.model_menu_focused_item = 0;
+    }
+    pub(super) fn step_slider(&mut self, delta: isize) {
+        let count = self.conversation.effort_ids().len();
+        if count == 0 {
+            return;
+        }
+        let index = self.effective_slider_index() as isize + delta;
+        self.set_slider_index(index.clamp(0, count as isize - 1) as usize);
+    }
+    pub(super) fn effective_slider_index(&self) -> usize {
+        let effort = self.request_effort();
+        self.conversation
+            .effort_ids()
+            .iter()
+            .position(|option| *option == effort)
+            .unwrap_or(0)
+    }
     pub(super) fn handle_model_menu_key(
         &mut self,
         event: &KeyDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !self.menu_open {
             return;
         }
         let key = event.keystroke.key.as_str();
-        if let Some(submenu) = self.submenu {
-            let count = self.submenu_option_count(submenu);
-            if count == 0 {
-                if matches!(key, "left" | "escape") {
-                    self.submenu = None;
-                    self.submenu_keyboard_focus = false;
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-                return;
+        let count = self.picker_item_count().max(1);
+        match key {
+            "down" => {
+                self.model_menu_focused_item = if self.model_menu_keyboard_focus {
+                    (self.model_menu_focused_item + 1) % count
+                } else {
+                    0
+                };
+                self.model_menu_keyboard_focus = true;
             }
-            match key {
-                "down" => {
-                    self.submenu_focused_item = if self.submenu_keyboard_focus {
-                        (self.submenu_focused_item + 1) % count
-                    } else {
-                        0
-                    };
-                    self.submenu_keyboard_focus = true;
-                }
-                "up" => {
-                    self.submenu_focused_item = if self.submenu_keyboard_focus {
-                        (self.submenu_focused_item + count - 1) % count
-                    } else {
-                        count - 1
-                    };
-                    self.submenu_keyboard_focus = true;
-                }
-                "home" => {
-                    self.submenu_focused_item = 0;
-                    self.submenu_keyboard_focus = true;
-                }
-                "end" => {
-                    self.submenu_focused_item = count - 1;
-                    self.submenu_keyboard_focus = true;
-                }
-                "left" | "escape" => {
-                    self.submenu = None;
-                    self.submenu_keyboard_focus = false;
-                }
-                "enter" | "space" => {
-                    if !self.submenu_keyboard_focus {
-                        return;
+            "up" => {
+                self.model_menu_focused_item = if self.model_menu_keyboard_focus {
+                    (self.model_menu_focused_item + count - 1) % count
+                } else {
+                    count - 1
+                };
+                self.model_menu_keyboard_focus = true;
+            }
+            "home" => {
+                self.model_menu_focused_item = 0;
+                self.model_menu_keyboard_focus = true;
+            }
+            "end" => {
+                self.model_menu_focused_item = count - 1;
+                self.model_menu_keyboard_focus = true;
+            }
+            "left" | "right" if !self.picker_shows_model_list() => {
+                self.step_slider(if key == "left" { -1 } else { 1 });
+            }
+            "left" if self.model_list_open && self.conversation.effort_ids().len() >= 2 => {
+                self.show_model_list(false);
+            }
+            "enter" | "space" if self.model_menu_keyboard_focus => {
+                if self.picker_shows_model_list() {
+                    match self.model_menu_focused_item {
+                        0 => self.select_default_model(),
+                        row => self.select_model_at(row - 1),
                     }
-                    match submenu {
-                        PickerSubmenu::Model => self.select_model_at(self.submenu_focused_item),
-                        PickerSubmenu::Effort => self.select_effort_at(self.submenu_focused_item),
-                        PickerSubmenu::ServiceTier => {
-                            self.select_service_tier_at(self.submenu_focused_item)
+                    self.show_model_list(false);
+                    self.model_menu_keyboard_focus = true;
+                } else {
+                    match self.focused_picker_control() {
+                        Some(PickerControl::ViewToggle) => {
+                            self.show_model_list(true);
+                            self.model_menu_keyboard_focus = true;
                         }
-                    }
-                    self.menu_open = false;
-                    self.submenu = None;
-                }
-                "tab" => return,
-                _ => return,
-            }
-        } else {
-            match key {
-                "down" => {
-                    self.model_menu_focused_item = if self.model_menu_keyboard_focus {
-                        (self.model_menu_focused_item + 1) % 4
-                    } else {
-                        0
-                    };
-                    self.model_menu_keyboard_focus = true;
-                }
-                "up" => {
-                    self.model_menu_focused_item = if self.model_menu_keyboard_focus {
-                        (self.model_menu_focused_item + 3) % 4
-                    } else {
-                        3
-                    };
-                    self.model_menu_keyboard_focus = true;
-                }
-                "home" => {
-                    self.model_menu_focused_item = 0;
-                    self.model_menu_keyboard_focus = true;
-                }
-                "end" => {
-                    self.model_menu_focused_item = 3;
-                    self.model_menu_keyboard_focus = true;
-                }
-                "right" | "enter" | "space" if self.model_menu_focused_item < 3 => {
-                    self.submenu = Some(match self.model_menu_focused_item {
-                        0 => PickerSubmenu::Model,
-                        1 => PickerSubmenu::Effort,
-                        _ => PickerSubmenu::ServiceTier,
-                    });
-                    self.submenu_keyboard_focus = false;
-                }
-                "enter" | "space" => {
-                    if self.selection_is_default() {
-                        self.advanced_expanded = !self.advanced_expanded;
-                    } else {
-                        self.reset_model_selection();
+                        Some(PickerControl::Reset) => {
+                            self.reset_model_selection();
+                            self.model_menu_focused_item = 0;
+                        }
+                        Some(PickerControl::Fast) => self.toggle_accelerated_service_tier(),
+                        Some(PickerControl::Slider) | None => {}
                     }
                 }
-                "escape" | "tab" => {
-                    self.menu_open = false;
-                    self.submenu = None;
-                }
-                _ => return,
             }
+            "escape" | "tab" => {
+                self.close_picker(cx);
+                self.model_trigger_focus.focus(window, cx);
+            }
+            _ => return,
+        }
+        if self.picker_shows_model_list() {
+            self.model_list_scroll
+                .scroll_to_item(self.model_menu_focused_item + 1);
         }
         cx.stop_propagation();
         cx.notify();
@@ -318,8 +391,10 @@ impl ComposerView {
             cx.notify();
         }
         if self.menu_open {
+            self.model_ultra_warning_until = None;
             self.menu_open = false;
-            self.submenu = None;
+            self.model_list_open = false;
+            self.slider_dragging = false;
             cx.notify();
         }
         if self.permission_menu_open {
@@ -330,23 +405,20 @@ impl ComposerView {
     }
     pub fn open_picker(&mut self, cx: &mut Context<Self>) {
         self.menu_open = true;
+        self.model_list_open = false;
+        self.model_menu_keyboard_focus = false;
         cx.notify();
     }
+    /// Capture entry point: `simple` opens the slider view and `model` (or
+    /// `list`) the model list.
     pub fn open_picker_submenu(&mut self, name: &str, cx: &mut Context<Self>) {
         self.menu_open = true;
-        self.advanced_expanded = name != "simple";
-        self.submenu = match name {
-            "model" => Some(PickerSubmenu::Model),
-            "effort" => Some(PickerSubmenu::Effort),
-            "speed" | "service-tier" => Some(PickerSubmenu::ServiceTier),
-            _ => None,
-        };
+        self.model_list_open = matches!(name, "model" | "list" | "models");
         cx.notify();
     }
     pub fn open_picker_slider_at(&mut self, index: usize, fast: bool, cx: &mut Context<Self>) {
         self.menu_open = true;
-        self.advanced_expanded = false;
-        self.submenu = None;
+        self.model_list_open = false;
         self.conversation.selected_service_tier = if fast {
             self.selected_model_entry()
                 .and_then(|model| model.service_tiers.first())
@@ -358,507 +430,37 @@ impl ComposerView {
         cx.notify();
     }
     pub(super) fn set_slider_index(&mut self, index: usize) {
-        let effort_count = self
-            .selected_model_entry()
-            .map(|model| model.supported_reasoning_efforts.len())
-            .unwrap_or(0);
+        let effort_count = self.conversation.effort_ids().len();
         if effort_count == 0 {
             self.conversation.slider_index = 0;
             return;
         }
+        let previous_effort = self.request_effort();
         self.select_effort_at(index.min(effort_count - 1));
-    }
-    pub(super) fn picker_row(
-        &self,
-        index: usize,
-        field: ModelPickerField<'_>,
-        theme: Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<Div> {
-        let ModelPickerField {
-            id,
-            label,
-            value,
-            submenu,
-        } = field;
-        let selected = self.submenu == Some(submenu);
-        let focused = self.model_menu_keyboard_focus && self.model_menu_focused_item == index;
-        div()
-            .id(id)
-            .h(px(28.5625))
-            .px(px(8.0))
-            .rounded(px(12.5))
-            .flex()
-            .items_center()
-            .text_size(px(13.0))
-            .line_height(px(18.5625))
-            .font_weight(gpui::FontWeight::NORMAL)
-            .text_color(theme.text)
-            .cursor_pointer()
-            .when(selected || focused, |row| row.bg(theme.sidebar_hover))
-            .hover(move |style| style.bg(theme.sidebar_hover))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                cx.stop_propagation();
-                // Hover may already have opened the submenu immediately before
-                // the click. Clicking its trigger must keep that menu open.
-                this.submenu = Some(submenu);
-                cx.notify();
-            }))
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered && this.submenu != Some(submenu) {
-                    this.submenu = Some(submenu);
-                    cx.notify();
-                }
-            }))
-            .child(div().flex_1().child(label.to_owned()))
-            .child(
-                div()
-                    .text_color(theme.text_tertiary)
-                    .child(value.to_owned()),
-            )
-            .child(
-                icon("chevron-down", theme.text_tertiary.into())
-                    .size(px(16.0))
-                    .ml(px(12.0))
-                    .with_transformation(Transformation::rotate(radians(
-                        -std::f32::consts::FRAC_PI_2,
-                    ))),
-            )
-    }
-    pub(super) fn option_row(&self, option: PickerOption<'_>, theme: Theme) -> gpui::Stateful<Div> {
-        let PickerOption {
-            id,
-            title,
-            detail,
-            truncate_detail,
-            selected,
-            focused,
-        } = option;
-        div()
-            .id(id)
-            .min_h(px(if detail.is_some() {
-                MODEL_PICKER_DETAIL_ROW_HEIGHT
-            } else {
-                MODEL_PICKER_ROW_HEIGHT
-            }))
-            .px(px(8.0))
-            .py(px(5.0))
-            .rounded(px(12.5))
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .cursor_pointer()
-            .when(focused, |row| row.bg(theme.sidebar_hover))
-            .hover(move |style| style.bg(theme.sidebar_hover))
-            .child(
-                div()
-                    .min_w(px(0.0))
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .text_size(px(13.0))
-                    .line_height(px(18.5625))
-                    .text_color(theme.text)
-                    .child(title.to_owned())
-                    .when_some(detail, |column, detail| {
-                        column.child(
-                            div()
-                                .min_w(px(0.0))
-                                .w_full()
-                                .text_size(px(12.0))
-                                .line_height(px(18.5625))
-                                .text_color(theme.text_tertiary)
-                                .when(truncate_detail, |detail| detail.truncate())
-                                .child(detail.to_owned()),
-                        )
-                    }),
-            )
-            .when(selected, |row| {
-                row.child(
-                    icon("check", theme.text.into())
-                        .size(px(17.0))
-                        .flex_none()
-                        .opacity(0.75),
-                )
-            })
-    }
-    pub(super) fn submenu(
-        &self,
-        kind: PickerSubmenu,
-        viewport_width: f32,
-        theme: Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<Div> {
-        let width = match kind {
-            PickerSubmenu::Model => 280.0,
-            PickerSubmenu::Effort => 180.0,
-            PickerSubmenu::ServiceTier => 233.0,
-        };
-        let estimated_height = match kind {
-            PickerSubmenu::Model => {
-                self.conversation.models.len().max(1) as f32 * MODEL_PICKER_ROW_HEIGHT
-                    + MODEL_PICKER_SUBMENU_VERTICAL_PADDING
-            }
-            PickerSubmenu::Effort => {
-                self.selected_model_entry()
-                    .map(|model| {
-                        model
-                            .supported_reasoning_efforts
-                            .iter()
-                            .map(|option| {
-                                if option.id == "ultra" {
-                                    MODEL_PICKER_DETAIL_ROW_HEIGHT
-                                } else {
-                                    MODEL_PICKER_ROW_HEIGHT
-                                }
-                            })
-                            .sum::<f32>()
-                    })
-                    .unwrap_or(MODEL_PICKER_ROW_HEIGHT)
-                    + MODEL_PICKER_SUBMENU_HEADER_HEIGHT
-                    + MODEL_PICKER_SUBMENU_VERTICAL_PADDING
-            }
-            PickerSubmenu::ServiceTier => {
-                self.submenu_option_count(kind).max(1) as f32 * MODEL_PICKER_DETAIL_ROW_HEIGHT
-                    + MODEL_PICKER_SUBMENU_HEADER_HEIGHT
-                    + MODEL_PICKER_SUBMENU_VERTICAL_PADDING
-            }
+        if self.conversation.selected_effort != "ultra" {
+            self.model_ultra_warning_until = None;
+        } else if previous_effort != "ultra" && self.conversation.model_explicit {
+            // The reference briefly replaces the model subtitle on reaching
+            // Ultra, then restores it after two seconds.
+            self.model_ultra_warning_until =
+                Some(std::time::Instant::now() + Duration::from_secs(2));
         }
-        .min(MODEL_PICKER_SUBMENU_MAX_HEIGHT);
-        let top = MODEL_PICKER_SUBMENU_BOTTOM_OFFSET - estimated_height;
-        let layout = self.trailing_margin.map_or_else(
-            || submenu_layout(viewport_width, width),
-            |margin| super::layout::submenu_layout_at_right(margin, width),
-        );
-        let mut menu = div()
-            .id("model-picker-submenu")
-            .absolute()
-            .top(px(top))
-            .w(px(layout.width))
-            .max_h(px(MODEL_PICKER_SUBMENU_MAX_HEIGHT))
-            .overflow_y_scroll()
-            .when(layout.open_left, |menu| {
-                menu.right(px(MODEL_PICKER_WIDTH + MODEL_PICKER_SUBMENU_GAP))
-            })
-            .when(!layout.open_left, |menu| {
-                menu.left(px(MODEL_PICKER_WIDTH + MODEL_PICKER_SUBMENU_GAP))
-            })
-            .p(px(4.0))
-            .rounded(px(15.0))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.model_picker_surface)
-            .shadow(vec![
-                BoxShadow::new(px(0.0), px(8.0), hsla(0.0, 0.0, 0.0, 0.12))
-                    .blur_radius(px(16.0))
-                    .spread_radius(px(-4.0)),
-            ])
-            .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()));
+    }
 
-        match kind {
-            PickerSubmenu::Model => {
-                if self.conversation.models.is_empty() {
-                    let message = self
-                        .conversation
-                        .model_catalog_error
-                        .clone()
-                        .unwrap_or_else(|| crate::i18n::text("没有可用模型").to_owned());
-                    menu = menu.child(self.option_row(
-                        PickerOption {
-                            id: ("model-option", 0),
-                            title: &message,
-                            detail: None,
-                            truncate_detail: false,
-                            selected: false,
-                            focused: false,
-                        },
-                        theme,
-                    ));
-                }
-                for (index, model) in self.conversation.models.iter().cloned().enumerate() {
-                    let model_name = model.model.clone();
-                    menu = menu.child(
-                        self.option_row(
-                            PickerOption {
-                                id: ("model-option", index),
-                                title: &model.display_name,
-                                detail: None,
-                                truncate_detail: false,
-                                selected: self.conversation.selected_model == model_name,
-                                focused: self.submenu_keyboard_focus
-                                    && self.submenu_focused_item == index,
-                            },
-                            theme,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            if let Some(index) = this.conversation.models.iter().position(|model| {
-                                model.model == model_name || model.id == model_name
-                            }) {
-                                this.select_model_at(index);
-                            }
-                            this.menu_open = false;
-                            this.submenu = None;
-                            cx.notify();
-                        })),
-                    );
-                }
-            }
-            PickerSubmenu::Effort => {
-                menu = menu.child(
-                    div()
-                        .h(px(26.0))
-                        .px(px(8.0))
-                        .flex()
-                        .items_center()
-                        .text_size(px(13.0))
-                        .line_height(px(18.5625))
-                        .text_color(theme.text_tertiary)
-                        .child(crate::i18n::text("推理强度")),
-                );
-                let options = self
-                    .selected_model_entry()
-                    .map(|model| model.supported_reasoning_efforts.clone())
-                    .unwrap_or_default();
-                for (index, option) in options.into_iter().enumerate() {
-                    let effort_id = option.id.clone();
-                    let title = Self::effort_label(&effort_id).to_owned();
-                    let detail = Self::effort_detail(&effort_id);
-                    menu = menu.child(
-                        self.option_row(
-                            PickerOption {
-                                id: ("effort-option", index),
-                                title: &title,
-                                detail,
-                                truncate_detail: true,
-                                selected: self.conversation.selected_effort == effort_id,
-                                focused: self.submenu_keyboard_focus
-                                    && self.submenu_focused_item == index,
-                            },
-                            theme,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            if let Some(index) = this.selected_model_entry().and_then(|model| {
-                                model
-                                    .supported_reasoning_efforts
-                                    .iter()
-                                    .position(|option| option.id == effort_id)
-                            }) {
-                                this.select_effort_at(index);
-                            }
-                            this.menu_open = false;
-                            this.submenu = None;
-                            cx.notify();
-                        })),
-                    );
-                }
-            }
-            PickerSubmenu::ServiceTier => {
-                menu = menu.child(
-                    div()
-                        .h(px(26.0))
-                        .px(px(8.0))
-                        .flex()
-                        .items_center()
-                        .text_size(px(13.0))
-                        .line_height(px(18.5625))
-                        .text_color(theme.text_tertiary)
-                        .child(crate::i18n::text("速度")),
-                );
-                let service_tiers = self
-                    .selected_model_entry()
-                    .map(|model| model.service_tiers.clone())
-                    .unwrap_or_default();
-                menu = menu.child(
-                    self.option_row(
-                        PickerOption {
-                            id: ("service-tier-option", 0),
-                            title: crate::i18n::text("标准"),
-                            detail: Some(crate::i18n::text("默认速度")),
-                            truncate_detail: false,
-                            selected: self.conversation.selected_service_tier.is_none(),
-                            focused: self.submenu_keyboard_focus && self.submenu_focused_item == 0,
-                        },
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.select_service_tier_at(0);
-                        this.menu_open = false;
-                        this.submenu = None;
-                        cx.notify();
-                    })),
-                );
-                for (offset, tier) in service_tiers.into_iter().enumerate() {
-                    let index = offset + 1;
-                    let tier_id = tier.id.clone();
-                    menu = menu.child(
-                        self.option_row(
-                            PickerOption {
-                                id: ("service-tier-option", index),
-                                title: &tier.name,
-                                detail: Some(&tier.description),
-                                truncate_detail: false,
-                                selected: self.conversation.selected_service_tier.as_deref()
-                                    == Some(tier_id.as_str()),
-                                focused: self.submenu_keyboard_focus
-                                    && self.submenu_focused_item == index,
-                            },
-                            theme,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            if let Some(index) = this.selected_model_entry().and_then(|model| {
-                                model
-                                    .service_tiers
-                                    .iter()
-                                    .position(|tier| tier.id == tier_id)
-                            }) {
-                                this.select_service_tier_at(index + 1);
-                            }
-                            this.menu_open = false;
-                            this.submenu = None;
-                            cx.notify();
-                        })),
-                    );
-                }
-            }
-        }
-        menu
+    pub(super) fn model_ultra_warning_visible(&self) -> bool {
+        self.conversation.model_explicit
+            && self.conversation.selected_effort == "ultra"
+            && self
+                .model_ultra_warning_until
+                .is_some_and(|until| until > std::time::Instant::now())
     }
-    pub(super) fn view_controls(
-        &self,
-        show_fast_toggle: bool,
-        theme: Theme,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let focused = self.model_menu_keyboard_focus && self.model_menu_focused_item == 3;
-        let mut controls = div().h(px(32.0)).flex().items_center();
 
-        if self.selection_is_default() {
-            controls = controls
-                .child(
-                    // The reference's `_ViewToggle` has no width of its own: 4px
-                    // around a 2px/4px content box that holds the label, a 4px
-                    // gap and the chevron. A fixed 58px was the width of the
-                    // two-character Chinese label and clipped "Advanced".
-                    div()
-                        .id("model-picker-advanced")
-                        .debug_selector(|| "MODEL_PICKER_ADVANCED".to_owned())
-                        .h(px(32.0))
-                        .flex_none()
-                        .p(px(4.0))
-                        .rounded(px(8.0))
-                        .flex()
-                        .items_center()
-                        .whitespace_nowrap()
-                        .text_color(theme.text_tertiary)
-                        .cursor_pointer()
-                        .when(focused, |row| row.bg(theme.sidebar_hover))
-                        .hover(move |style| style.bg(theme.sidebar_hover))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.advanced_expanded = !this.advanced_expanded;
-                            this.submenu = None;
-                            this.slider_dragging = false;
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .h_full()
-                                .px(px(4.0))
-                                .py(px(2.0))
-                                .rounded(px(6.0))
-                                .flex()
-                                .items_center()
-                                .gap(px(4.0))
-                                .child(crate::i18n::text("高级"))
-                                .child(
-                                    icon("chevron-down", theme.text_tertiary.into())
-                                        .size(px(12.0))
-                                        .with_transformation(Transformation::rotate(radians(
-                                            if self.advanced_expanded {
-                                                std::f32::consts::PI
-                                            } else {
-                                                0.0
-                                            },
-                                        ))),
-                                ),
-                        ),
-                )
-                .child(div().flex_1());
-        } else {
-            controls = controls.child(
-                div()
-                    .id("model-picker-reset")
-                    .h(px(28.0))
-                    .when(show_fast_toggle, |row| row.flex_1())
-                    .when(!show_fast_toggle, |row| row.w_full())
-                    .px(px(8.0))
-                    .rounded(px(12.5))
-                    .flex()
-                    .items_center()
-                    .text_size(px(13.0))
-                    .line_height(px(18.5625))
-                    .text_color(theme.text_tertiary)
-                    .cursor_pointer()
-                    .when(focused, |row| row.bg(theme.sidebar_hover))
-                    .hover(move |style| style.bg(theme.sidebar_hover))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.reset_model_selection();
-                        cx.notify();
-                    }))
-                    .child(div().flex_1().child(crate::i18n::text("重置为默认设置")))
-                    .child(icon("model-reset", theme.text_tertiary.into()).size(px(14.0))),
-            );
-        }
-
-        if show_fast_toggle {
-            controls.child(
-                div()
-                    .id("model-picker-fast-toggle")
-                    .size(px(32.0))
-                    .rounded(px(8.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(move |style| style.bg(theme.sidebar_hover))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.toggle_accelerated_service_tier();
-                        cx.notify();
-                    }))
-                    .child(
-                        icon(
-                            "model-fast",
-                            if self.conversation.selected_service_tier.is_some() {
-                                if self.conversation.selected_effort == "ultra" {
-                                    rgba(0xad7bf9ff).into()
-                                } else {
-                                    rgba(0x339cffff).into()
-                                }
-                            } else {
-                                theme.text_tertiary.into()
-                            },
-                        )
-                        .size(px(16.0)),
-                    ),
-            )
-        } else {
-            controls
-        }
-    }
     pub(super) fn power_slider(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
-        const TRACK_WIDTH: f32 = 200.0;
+        // CDP (26.1007): a 230px track whose first and last ticks sit 13px
+        // inside its ends.
+        const TRACK_WIDTH: f32 = 230.0;
         const TRACK_INSET: f32 = 13.0;
-        let effort_count = self
-            .selected_model_entry()
-            .map(|model| model.supported_reasoning_efforts.len())
-            .unwrap_or(0)
-            .max(1);
+        let effort_count = self.conversation.effort_ids().len().max(1);
         let step = if effort_count > 1 {
             (TRACK_WIDTH - TRACK_INSET * 2.0) / (effort_count - 1) as f32
         } else {
@@ -871,9 +473,9 @@ impl ComposerView {
                 TRACK_WIDTH * 0.5
             }
         };
-        let slider_index = self.conversation.slider_index.min(effort_count - 1);
+        let slider_index = self.effective_slider_index().min(effort_count - 1);
         let thumb_center = step_center(slider_index);
-        let ultra_mode = self.conversation.selected_effort == "ultra";
+        let ultra_mode = self.request_effort() == "ultra";
         let thumb_size = if self.slider_dragging { 32.0 } else { 28.0 };
         let mut range = div()
             .absolute()
@@ -883,7 +485,7 @@ impl ComposerView {
             .w(px(thumb_center))
             .rounded(px(12.0))
             .overflow_hidden()
-            .bg(rgba(0x339cffff));
+            .bg(rgba(CHART_BLUE));
 
         if ultra_mode {
             // Keep the first radius of the rounded range as solid blue. Starting the
@@ -901,7 +503,7 @@ impl ComposerView {
                     .child(div().h_full().w(px(TRACK_WIDTH * 0.55 - RANGE_RADIUS)).bg(
                         linear_gradient(
                             90.0,
-                            linear_color_stop(rgba(0x339cffff), 0.0),
+                            linear_color_stop(rgba(CHART_BLUE), 0.0),
                             linear_color_stop(rgba(0xad7bf9ff), 1.0),
                         ),
                     ))
@@ -1051,6 +653,10 @@ impl ComposerView {
             .border_color(theme.border)
             .child(range);
 
+        // Ticks inside the range are white at 30%; the rest use half of the
+        // description color, which differs between the themes.
+        let mut unselected_tick: gpui::Hsla = theme.text_tertiary.into();
+        unselected_tick.a *= 0.5;
         for index in 0..effort_count {
             let center = step_center(index);
             let selected = index <= slider_index;
@@ -1064,9 +670,9 @@ impl ComposerView {
                     .size(px(if hidden { 3.0 } else { 4.0 }))
                     .rounded_full()
                     .bg(if selected {
-                        rgba(0xffffff4d)
+                        rgba(0xffffff4d).into()
                     } else {
-                        rgba(0xffffff40)
+                        unselected_tick
                     })
                     .opacity(if hidden { 0.0 } else { 1.0 }),
             );
@@ -1147,7 +753,12 @@ impl ComposerView {
                             .rounded_full()
                             .bg(rgba(0xffffffff))
                             .border(px(0.5))
-                            .border_color(rgba(0xffffff28))
+                            // `--color-border-strong`.
+                            .border_color(if self.mode == ThemeMode::Light {
+                                rgba(0x1a1c1f1e)
+                            } else {
+                                rgba(0xffffff28)
+                            })
                             .shadow(vec![
                                 BoxShadow::new(px(0.0), px(0.0), hsla(0.0, 0.0, 0.0, 0.10))
                                     .blur_radius(px(2.0)),
@@ -1156,114 +767,368 @@ impl ComposerView {
                     .child(hit_areas),
             )
     }
+
+    fn picker_view_toggle(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        let explicit = self.conversation.model_explicit;
+        let ultra_warning = self.model_ultra_warning_visible();
+        let model = if ultra_warning {
+            crate::i18n::text("更快消耗使用额度").to_owned()
+        } else {
+            self.selected_model_label()
+        };
+        let effort = self.selected_effort_label();
+        let focused = self.focused_picker_control() == Some(PickerControl::ViewToggle);
+        let subtitle = div()
+            .min_w(px(0.0))
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .text_size(px(if explicit { 12.0 } else { 14.0 }))
+            .line_height(px(if explicit { 16.0 } else { 20.0 }))
+            .text_color(if explicit {
+                theme.text_secondary
+            } else {
+                theme.text
+            })
+            // Equal side columns center the model below the effort; the
+            // transient Ultra warning spans the entire subtitle instead.
+            .when(explicit && !ultra_warning, |d| {
+                d.child(div().w(px(16.0)).flex_none())
+            })
+            .child(div().min_w(px(0.0)).truncate().child(model))
+            .when(!explicit, |d| {
+                d.child(div().text_color(theme.text_tertiary).child(effort.clone()))
+            })
+            .when(!ultra_warning, |d| {
+                d.child(div().w(px(16.0)).flex_none().flex().items_center().child(
+                    icon("slash-submenu-chevron", theme.text_tertiary.into()).size(px(12.0)),
+                ))
+            });
+        let content = div()
+            .min_w(px(0.0))
+            .px(px(4.0))
+            .py(px(2.0))
+            .flex()
+            .when(explicit, |d| d.flex_col())
+            .items_center()
+            .justify_center()
+            .when(explicit, |d| {
+                d.child(
+                    div()
+                        .text_size(px(14.0))
+                        .line_height(px(20.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(if self.request_effort() == "ultra" {
+                            rgba(0xad7bf9ff)
+                        } else {
+                            rgba(CHART_BLUE)
+                        })
+                        .child(effort),
+                )
+            })
+            .child(subtitle);
+        div()
+            .id("model-picker-view-toggle")
+            .debug_selector(|| "MODEL_PICKER_VIEW_TOGGLE".to_owned())
+            .role(gpui::Role::MenuItem)
+            .aria_label(crate::i18n::text("选择模型"))
+            .min_w(px(0.0))
+            .max_w_full()
+            .rounded(px(8.0))
+            .p(px(4.0))
+            .cursor_pointer()
+            .when(focused, |d| d.bg(theme.sidebar_hover))
+            .hover(move |d| d.bg(theme.sidebar_hover))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.show_model_list(true);
+                this.model_menu_keyboard_focus = false;
+                this.model_menu_focus.focus(window, cx);
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .child(content)
+    }
+
+    fn slider_view(&self, theme: Theme, cx: &mut Context<Self>) -> Div {
+        let explicit = self.conversation.model_explicit;
+        let ultra_warning = self.model_ultra_warning_visible();
+        let fast = self.fast_mode_available();
+        let mut controls = div()
+            .relative()
+            .h(px(if explicit { 48.0 } else { 36.0 }))
+            .px(px(if explicit && !ultra_warning {
+                32.0
+            } else if fast || ultra_warning {
+                16.0
+            } else {
+                8.0
+            }))
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(!explicit, |d| d.child(div().w(px(16.0)).flex_none()))
+            .child(self.picker_view_toggle(theme, cx));
+        if explicit {
+            let focused = self.focused_picker_control() == Some(PickerControl::Reset);
+            controls = controls.child(
+                div()
+                    .id("model-picker-reset")
+                    .role(gpui::Role::MenuItem)
+                    .aria_label(crate::i18n::text("重置为默认模型"))
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .size(px(32.0))
+                    .rounded(px(8.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .when(focused, |d| d.bg(theme.sidebar_hover))
+                    .hover(move |d| d.bg(theme.sidebar_hover))
+                    .tooltip(|_, cx| {
+                        cx.new(|_| TrayTooltip(crate::i18n::text("重置为默认模型").into()))
+                            .into()
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.reset_model_selection();
+                        this.model_menu_focus.focus(window, cx);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+                    .child(icon("model-reset", theme.text_tertiary.into()).size(px(16.0))),
+            );
+        }
+        if fast {
+            let focused = self.focused_picker_control() == Some(PickerControl::Fast);
+            controls = controls.child(
+                div()
+                    .id("model-picker-fast-toggle")
+                    .role(gpui::Role::MenuItem)
+                    .aria_label(crate::i18n::text("快速模式"))
+                    .aria_selected(self.conversation.selected_service_tier.is_some())
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .size(px(32.0))
+                    .rounded(px(8.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .when(focused, |d| d.bg(theme.sidebar_hover))
+                    .hover(move |d| d.bg(theme.sidebar_hover))
+                    .tooltip(|_, cx| {
+                        cx.new(|_| TrayTooltip(crate::i18n::text("快速模式").into()))
+                            .into()
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_accelerated_service_tier();
+                        this.model_menu_focus.focus(window, cx);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+                    .child(
+                        icon(
+                            "model-fast",
+                            if self.conversation.selected_service_tier.is_some() {
+                                if self.request_effort() == "ultra" {
+                                    rgba(0xad7bf9ff).into()
+                                } else {
+                                    rgba(CHART_BLUE).into()
+                                }
+                            } else {
+                                theme.text_tertiary.into()
+                            },
+                        )
+                        .size(px(16.0)),
+                    ),
+            );
+        }
+        let focused = self.focused_picker_control() == Some(PickerControl::Slider);
+        div().p(px(4.0)).flex().flex_col().child(controls)
+            .child(div().id("model-picker-power-control").py(px(4.0)).role(gpui::Role::MenuItem)
+                .aria_label(crate::i18n::format!("推理强度：{effort}" => "Power: {effort}", effort = self.selected_effort_label()))
+                .when(focused, |d| d.bg(theme.sidebar_hover).rounded(px(8.0)))
+                .child(self.power_slider(theme, cx)))
+    }
+
+    fn model_list(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        let row = |index: usize, title: String, detail: Option<SharedString>, selected: bool| {
+            div()
+                .id(("model-picker-model", index))
+                .debug_selector(move || format!("MODEL_PICKER_MODEL_{index}"))
+                .role(gpui::Role::MenuItem)
+                .aria_label(title.clone())
+                .aria_selected(selected)
+                .min_h(px(if detail.is_some() {
+                    DEFAULT_ROW_HEIGHT
+                } else {
+                    ROW_HEIGHT
+                }))
+                .px(px(8.0))
+                .py(px(5.0))
+                .rounded(px(15.0))
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .when(
+                    self.model_menu_keyboard_focus && self.model_menu_focused_item == index,
+                    |d| d.bg(theme.sidebar_hover).aria_active_descendant(),
+                )
+                .hover(move |d| d.bg(theme.sidebar_hover))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if index == 0 {
+                        this.select_default_model();
+                    } else {
+                        this.select_model_at(index - 1);
+                    }
+                    this.show_model_list(false);
+                    this.model_menu_keyboard_focus = false;
+                    this.model_menu_focus.focus(window, cx);
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(13.0))
+                                .line_height(px(ROW_LINE_HEIGHT))
+                                .child(title),
+                        )
+                        .children(detail.map(|detail| {
+                            div()
+                                .text_size(px(12.0))
+                                .line_height(px(16.0))
+                                .text_color(theme.text_tertiary)
+                                .child(detail)
+                        })),
+                )
+                .when(selected, |d| {
+                    d.child(
+                        icon("permission-check", theme.text_secondary.into())
+                            .size(px(16.0))
+                            .ml(px(6.0)),
+                    )
+                })
+        };
+        div()
+            .id("model-picker-model-list")
+            .p(px(4.0))
+            .max_h(px(MODEL_LIST_MAX_HEIGHT))
+            .overflow_y_scroll()
+            .track_scroll(&self.model_list_scroll)
+            .child(
+                div()
+                    .px(px(8.0))
+                    .py(px(5.0))
+                    .text_size(px(13.0))
+                    .line_height(px(ROW_LINE_HEIGHT))
+                    .text_color(theme.text_tertiary)
+                    .child(crate::i18n::text("选择模型")),
+            )
+            .when(!self.conversation.models.is_empty(), |menu| {
+                menu.child(row(
+                    0,
+                    crate::i18n::text("默认").to_owned(),
+                    Some(crate::i18n::text("推荐模型组合").into()),
+                    !self.conversation.model_explicit,
+                ))
+            })
+            .when(self.conversation.models.is_empty(), |menu| {
+                menu.child(
+                    div()
+                        .px(px(8.0))
+                        .py(px(5.0))
+                        .text_size(px(13.0))
+                        .line_height(px(ROW_LINE_HEIGHT))
+                        .text_color(theme.text_tertiary)
+                        .child(
+                            self.conversation
+                                .model_catalog_error
+                                .clone()
+                                .unwrap_or_else(|| crate::i18n::text("没有可用模型").to_owned()),
+                        ),
+                )
+            })
+            .children(
+                self.conversation
+                    .models
+                    .iter()
+                    .enumerate()
+                    .map(|(index, model)| {
+                        row(
+                            index + 1,
+                            short_model_label(&model.display_name),
+                            None,
+                            self.conversation.model_explicit
+                                && (self.conversation.selected_model == model.model
+                                    || self.conversation.selected_model == model.id),
+                        )
+                        .tooltip({
+                            let description = model.description.clone();
+                            move |_, cx| cx.new(|_| TrayTooltip(description.clone().into())).into()
+                        })
+                    }),
+            )
+    }
+
     pub(super) fn model_menu(
         &self,
-        viewport_width: f32,
+        _viewport_width: f32,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<Div> {
-        let selected_model_label = self.selected_model_label();
-        let selected_effort_label = self.selected_effort_label();
-        let selected_service_tier_label = self.selected_service_tier_label();
-        let selection_is_default = self.selection_is_default();
-        let mut menu = div()
+        // The popup aligns to the trigger's trailing edge and maintains its
+        // width while changing views. The trigger itself never reserves space.
+        div()
             .id("model-picker-menu")
+            .debug_selector(|| "MODEL_PICKER_MENU".to_owned())
+            .role(gpui::Role::Menu)
+            .key_context("ComposerModelPicker")
             .track_focus(&self.model_menu_focus)
+            .on_action(
+                cx.listener(|this, _: &super::DismissModelPicker, window, cx| {
+                    this.close_picker(cx);
+                    this.model_trigger_focus.focus(window, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .on_key_down(cx.listener(Self::handle_model_menu_key))
             .absolute()
-            .right(px(MODEL_PICKER_RIGHT_INSET))
-            .bottom(px(46.0))
+            .right(px(super::MODEL_PICKER_RIGHT_INSET))
+            .bottom(px(8.0 + 28.0 + MODEL_PICKER_MENU_GAP))
             .w(px(MODEL_PICKER_WIDTH))
-            .p(px(4.0))
-            .rounded(px(15.0))
-            .border_1()
-            .border_color(theme.border)
+            .rounded(px(20.0))
             .bg(theme.model_picker_surface)
             .shadow(vec![
+                BoxShadow::new(px(0.0), px(0.0), theme.border.into()).spread_radius(px(0.5)),
                 BoxShadow::new(px(0.0), px(8.0), hsla(0.0, 0.0, 0.0, 0.12))
                     .blur_radius(px(16.0))
                     .spread_radius(px(-4.0)),
             ])
-            .font_family(".SystemUIFont")
-            .text_size(px(13.0))
-            .font_weight(gpui::FontWeight::NORMAL)
+            .font(ui_font())
+            .font_weight(crate::theme::UI_BODY_FONT_WEIGHT)
             .text_color(theme.text)
-            .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()));
-
-        if self.advanced_expanded {
-            menu = menu
-                .child(self.picker_row(
-                    0,
-                    ModelPickerField {
-                        id: "model-picker-model-row",
-                        label: crate::i18n::text("模型"),
-                        value: &selected_model_label,
-                        submenu: PickerSubmenu::Model,
-                    },
-                    theme,
-                    cx,
-                ))
-                .child(self.picker_row(
-                    1,
-                    ModelPickerField {
-                        id: "model-picker-effort-row",
-                        label: crate::i18n::text("推理强度"),
-                        value: &selected_effort_label,
-                        submenu: PickerSubmenu::Effort,
-                    },
-                    theme,
-                    cx,
-                ))
-                .child(self.picker_row(
-                    2,
-                    ModelPickerField {
-                        id: "model-picker-service-tier-row",
-                        label: crate::i18n::text("速度"),
-                        value: &selected_service_tier_label,
-                        submenu: PickerSubmenu::ServiceTier,
-                    },
-                    theme,
-                    cx,
-                ))
-                .child(if selection_is_default {
-                    div()
-                        .h(px(8.0))
-                        .px(px(8.0))
-                        .py(px(3.5))
-                        .child(div().h(px(1.0)).w_full().bg(theme.border))
-                } else {
-                    div().h(px(4.0))
-                })
-                .child(self.view_controls(false, theme, cx));
-        } else {
-            menu = menu
-                .child(self.view_controls(true, theme, cx))
-                .child(div().h(px(4.0)))
-                .child(self.power_slider(theme, cx))
-                .child(div().h(px(8.0)));
-        }
-
-        if let Some(submenu) = self.submenu {
-            menu = menu.child(deferred(self.submenu(submenu, viewport_width, theme, cx)));
-        }
-        menu
+            .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
+            .on_mouse_down_out(cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                if event.button == MouseButton::Left
+                    && !this
+                        .model_trigger_bounds
+                        .get()
+                        .is_some_and(|bounds| bounds.contains(&event.position))
+                {
+                    this.close_picker(cx);
+                }
+            }))
+            .child(if self.picker_shows_model_list() {
+                self.model_list(theme, cx).into_any_element()
+            } else {
+                self.slider_view(theme, cx).into_any_element()
+            })
     }
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct ModelPickerField<'a> {
-    pub(super) id: &'static str,
-    pub(super) label: &'a str,
-    pub(super) value: &'a str,
-    pub(super) submenu: PickerSubmenu,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct PickerOption<'a> {
-    pub(super) id: (&'static str, usize),
-    pub(super) title: &'a str,
-    pub(super) detail: Option<&'a str>,
-    pub(super) truncate_detail: bool,
-    pub(super) selected: bool,
-    pub(super) focused: bool,
 }

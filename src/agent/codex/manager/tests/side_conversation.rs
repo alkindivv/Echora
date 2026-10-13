@@ -375,6 +375,36 @@ fn side_conversation_file_context_and_planning_use_typed_turn_input() {
 }
 
 #[test]
+fn a_model_without_reasoning_effort_sends_null_instead_of_an_empty_enum() {
+    let mut request = super::request("hello", Some("thread"));
+    request.effort.clear();
+    request.context.plan_mode = None;
+    let params =
+        super::super::turn::build_turn_start_params(&request, "thread", false, &[]).unwrap();
+    assert_eq!(params["model"], request.model);
+    assert!(params["effort"].is_null());
+    request.effort = "high".into();
+    let params =
+        super::super::turn::build_turn_start_params(&request, "thread", false, &[]).unwrap();
+    assert_eq!(params["effort"], "high");
+    let presets = [crate::agent::AgentCollaborationModePreset {
+        name: "Plan".into(),
+        mode: crate::agent::AgentCollaborationModeKind::Plan,
+        model: None,
+        reasoning_effort: None,
+    }];
+    request.effort.clear();
+    for plan in [false, true] {
+        request.context.plan_mode = Some(plan);
+        let params =
+            super::super::turn::build_turn_start_params(&request, "thread", false, &presets)
+                .unwrap();
+        assert!(params["effort"].is_null());
+        assert!(params["collaborationMode"]["settings"]["reasoning_effort"].is_null());
+    }
+}
+
+#[test]
 fn closing_side_chat_cancels_permission_confirmation_and_rejects_queued_changes() {
     let (manager, spawner) = manager_with_fake();
     let opened = manager.open_side_conversation(side_request());

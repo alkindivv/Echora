@@ -687,6 +687,13 @@ impl HomeView {
         {
             return;
         }
+        cx.subscribe(
+            &composer,
+            |_, _, event: &super::composer::OpenAttachmentPreview, cx| {
+                cx.emit(OpenImagePreview(event.0.clone()));
+            },
+        )
+        .detach();
         cx.subscribe(&composer, |_, _, _: &RequestFullAccessConfirmation, cx| {
             cx.emit(RequestFullAccessConfirmation);
         })
@@ -934,6 +941,16 @@ impl HomeView {
         });
     }
 
+    #[cfg(feature = "screenshot")]
+    pub fn attach_composer_files_for_capture(
+        &mut self,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer.update(cx, |composer, cx| {
+            composer.attach_files_for_capture(paths, cx)
+        });
+    }
     pub fn open_model_picker(&mut self, cx: &mut Context<Self>) {
         self.composer
             .update(cx, |composer, cx| composer.open_picker(cx));

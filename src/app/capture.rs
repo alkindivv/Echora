@@ -393,6 +393,16 @@ impl ChatApp {
     pub fn activity_capture_ready(&self, cx: &gpui::App) -> bool {
         self.sidebar.read(cx).activity_capture_ready() && self.account_capture_ready()
     }
+    #[cfg(feature = "screenshot")]
+    pub fn attach_composer_files_for_capture(
+        &mut self,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        self.home.update(cx, |home, cx| {
+            home.attach_composer_files_for_capture(paths, cx)
+        });
+    }
     pub fn open_model_picker(&mut self, cx: &mut Context<Self>) {
         self.home.update(cx, |home, cx| home.open_model_picker(cx));
     }

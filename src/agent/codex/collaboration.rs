@@ -93,7 +93,7 @@ pub(super) fn turn_collaboration_mode(
         "mode": mode_wire(mode),
         "settings": {
             "model": model,
-            "reasoning_effort": effort,
+            "reasoning_effort": (!effort.is_empty()).then_some(effort),
             "developer_instructions": null,
         }
     }))

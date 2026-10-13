@@ -128,7 +128,9 @@ Cargo 包和可执行文件目前仍名为 `gpui-chat-clone`，现有构建与�
 - **协作模式：** 计划与默认模式来自连接的 `collaborationMode/list` 预设，每个连接读取一次；服务端列出计划模式时才提供该选项，模型与推理强度始终使用你的选择。
 - **实时输出与历史：** 实时与恢复后的已完成轮次共用最终答复选择、工作过程折叠、答复操作与文件汇总。文本增量保留 item 身份，完成消息快照校正显示内容；相邻增量以 8 ms 窗口批处理，代码高亮复用已完成行，仅重解析未结束行。已完成轮次折叠最终答复之前的过程消息，追加的用户消息保留原有位置与附件。用户消息只显示最后一个 `## My request:`（或 `## My request for Codex:`）标题行之后的内容，与 ChatGPT 应用一致，因此其前的附件列表和内置浏览器的环境界面状态不会显示，实时与恢复的消息都是如此。文件变更按路径汇总并保留原始 patch。历史由 app-server 提供，不伪造缺失的时间、计划步骤快照或自动复核历史。
 - **审批：** 并发请求依次显示，提交后等待服务端释放。响应失败可见且不可重复提交。可查看原始请求补丁，展开和复制长命令。使用 Tab / 方向键导航、Enter 激活、Esc 关闭或拒绝；文件审批的 `Shift+Esc` 拒绝并停止轮次。
-- **权限：** 读取服务端 profile 全部页面，展示禁用选项及原因。菜单隐藏内置 `:read-only` profile，不显示后续轮次提示和手动重新读取入口。已有线程等待 RPC 成功与匹配的设置通知后才显示生效，更新影响后续轮次；复核者变化还会经 `turn/settings/update` 同步到进行中的轮次。完整访问权限需要应用内确认，侧边聊天独立管理权限。线程被另一个 app-server 占用时，警告卡片固定在输入框上方，不随会话滚动。
+- **权限：** 读取服务端 profile 全部页面，以判定实际配置与禁用原因。输入框菜单只提供「请求批准」「帮我批准」「完全访问权限」及其描述；自定义配置仍然生效并显示在触发按钮上。已有线程等待 RPC 成功与匹配的设置通知后才显示生效，更新影响后续轮次；复核者变化还会经 `turn/settings/update` 同步到进行中的轮次。完整访问权限需要应用内确认，侧边聊天独立管理权限。线程被另一个 app-server 占用时，警告卡片固定在输入框上方，不随会话滚动。
+- **模型选择器：** 滑块视图与模型列表共用一个弹层。选择模型时保留仍受支持的推理强度与速度；「默认」恢复模型目录的默认设置。配置或恢复的推理强度超出目录内模型的支持范围时，回退到模型默认值。配置或恢复的目录外模型保持选中，显示为「自定义」并提供六档后备推理强度；无法调整推理强度的模型直接打开模型列表。
+- **图片附件：** 显示 122×122 的方形裁切缩略图，并提供预览与移除入口；普通文件仍显示为标签。
 - **账户：** 账户菜单与登录流程都由连接级账户快照驱动。缺失的套餐显示为未知而不是杜撰，登录保留服务端返回的 `loginId` 直到完成通知到达，退出登录先确认再发请求。只提供 Codex 管理的 ChatGPT 登录，API key、外部 token 与 Bedrock 变体返回明确错误。具体协议覆盖见接入总表。
 - **配置：** 使用带版本的 `config/batchWrite` 保存并回读，项目层与受管层只读。冲突保留草稿，结果未知时不自动重试。保存的模型、推理强度、服务等级与个性默认值用于后续线程，不热更新已打开的线程。
 - **活动：** 计划支持流式更新、步骤进度、复制、显式下载和只读文件标签；搜索保留查询与结果，等待保留时长与状态。Hook 反馈只读。被拒绝的自动复核会显示「被拒绝的原因」和「批准后允许的操作」，并提供文字链接「批准」，通过 `thread/approveGuardianDeniedAction` 记录一次重试授权，不会执行该操作；斜杠菜单的「批准」列出最新 10 条可批准的拒绝。自动复核详情支持键盘操作和文字选择，遵循减少动态效果设置。认证恢复与弃用提示的展示边界见接入总表。
@@ -260,6 +262,7 @@ Computer Use 只能驱动 macOS 视作用户应用的 bundle，而且驱动过�
 | `--browser-state=new-tab/address/page/menu/clear-data/find/zoom/tab-menu/downloads/error [--browser-url=URL] [--browser-page-snapshot=/absolute/page.png] [--right-panel-width=PX]` | 浏览器的固定状态（`address` 输入 “exa”；`error` 加载一个被拒绝的本机端口）。`render_to_image` 不包含原生网页，因此 `--browser-page-snapshot` 另存网页快照及其位置与浮层洞，再用 `scripts/compose_browser_capture.py capture.png page.png out.png` 合成。可把 `GPUI_BROWSER_DATA_DIR` 指向夹具历史的副本。 |
 | `--language=en\|zh-CN\|auto` | 指定本次启动的 UI 语言；截图验收时明确指定，以保证可复现。 |
 | `--chat-search-state=initial\|selected\|hover\|scroll\|files-empty\|files-result\|files-loading` | 以固定状态打开历史会话搜索弹窗用于截图。`--chat-search-query=` 会先执行一次真实检索（无命中时显示空状态）；`--chat-search-index=` 指定选中行，`scroll` 状态下则是以像素计的滚动偏移。`files-*` 状态显示带固定结果的文件搜索形态。 |
+| `--composer-attachment=/absolute/image.png` | 为输入框验收添加本机图片或文件；可重复指定多个文件，需要 screenshot feature。搭配 `--model-picker-open` 或 `--model-picker-submenu=model` 打开滑块视图或模型列表。 |
 | `--image-generation-ui-state=running/completed/failed/load-error` | 固定图像生成状态；完成态另传 `--image-generation-path=/absolute/image.png`。 |
 | `--auto-approval-ui-state=inProgress/approved/denied/timedOut/aborted/strict/warning` | 自动复核，支持 `--auto-approval-expanded`、`--auto-approval-details-expanded` 与 `--reduce-motion`；长说明和动态采样使用 `--auto-approval-rationale-file`、`--auto-approval-motion-output`。 |
 | `--runtime-ui-state=completed/running/turnless/auth-started/auth-completed/interrupted/disconnected/history/long/deprecation` | 确定性 Hook、hookPrompt、认证与应用提示，不执行 Hook 或模型请求；`GPUI_RUNTIME_AUDIT_OUTPUT` 输出原始状态与本地收束原因。 |

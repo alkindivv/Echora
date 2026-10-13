@@ -348,24 +348,11 @@ impl ConversationState {
                         self.permission_error = None;
                     }
                     self.selected_model = settings.model.clone();
-                    self.selected_effort = settings
-                        .effort
-                        .clone()
-                        .or_else(|| {
-                            self.selected_model_entry()
-                                .map(|model| model.default_reasoning_effort.clone())
-                        })
-                        .unwrap_or_default();
+                    self.model_explicit = !self.selected_model.is_empty();
+                    self.selected_effort =
+                        self.resolve_effort_for_selection(settings.effort.clone());
                     self.selected_service_tier = settings.service_tier.clone();
-                    self.slider_index = self
-                        .selected_model_entry()
-                        .and_then(|model| {
-                            model
-                                .supported_reasoning_efforts
-                                .iter()
-                                .position(|effort| effort.id == self.selected_effort)
-                        })
-                        .unwrap_or(0);
+                    self.sync_slider_index();
                     self.actual_model = Some(settings.model);
                     self.model_status = None;
                     self.safety_buffering = false;

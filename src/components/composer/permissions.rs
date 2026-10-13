@@ -14,6 +14,11 @@ use crate::{
     theme::{Theme, ThemeMode, ui_font},
 };
 
+/// Title line height of a permission row (13px `text-sm` in ChatGPT 26.1007).
+const PERMISSION_TITLE_LINE_HEIGHT: f32 = 18.5714;
+/// 5px padding, the title line, and the 12/14 description line.
+const PERMISSION_ROW_HEIGHT: f32 = 5.0 + PERMISSION_TITLE_LINE_HEIGHT + 14.0 + 5.0;
+
 /// The reference's message when a thread cannot be resumed because the
 /// configuration does not load: what happened, what to fix, and what to do next.
 fn config_load_toast_text(failure: &crate::agent::ConfigLoadFailure) -> String {
@@ -487,7 +492,7 @@ impl ComposerView {
             match key {
                 "enter" | "space" | "down" | "up" => {
                     self.menu_open = false;
-                    self.submenu = None;
+                    self.model_list_open = false;
                     self.permission_menu_open = true;
                     self.permission_menu_keyboard_focus = matches!(key, "down" | "up");
                     self.permission_menu_focused_item = if key == "up" {
@@ -534,19 +539,11 @@ impl ComposerView {
                 self.permission_menu_keyboard_focus = true;
             }
             "enter" | "space" if self.permission_menu_keyboard_focus => {
-                if self.permission_menu_focused_item < 4 {
-                    self.activate_permission_mode(
-                        PermissionMode::at_menu_index(self.permission_menu_focused_item),
-                        cx,
-                    );
-                } else if let Some(profile) = self
-                    .extra_permission_profiles()
-                    .get(self.permission_menu_focused_item - 4)
+                if let Some(mode) = PermissionMode::MENU
+                    .get(self.permission_menu_focused_item)
+                    .copied()
                 {
-                    self.activate_permission_selection(
-                        crate::agent::AgentPermissionMode::Profile(profile.id.clone()),
-                        cx,
-                    );
+                    self.activate_permission_mode(mode, cx);
                 }
                 cx.stop_propagation();
                 return;
@@ -573,7 +570,7 @@ impl ComposerView {
             }
         }
         self.permission_menu_scroll
-            .scroll_to_item(self.permission_menu_focused_item + 1);
+            .scroll_to_item(self.permission_menu_focused_item);
         cx.stop_propagation();
         cx.notify();
     }
@@ -647,6 +644,10 @@ impl ComposerView {
         };
         (label.into(), icon, color)
     }
+    /// The menu lists exactly the three permission modes.
+    fn permission_menu_count(&self) -> usize {
+        PermissionMode::MENU.len()
+    }
     pub(super) fn permission_row(
         &self,
         index: usize,
@@ -682,16 +683,14 @@ impl ComposerView {
             })
             .when(keyboard_focused, |row| row.aria_active_descendant())
             .group(hover_group.clone())
-            .min_h(px(42.5625))
+            // CDP (ChatGPT 26.1007): 5px block padding around a 13/18.57
+            // title and a 12/14 description, so each row is 42.57px tall.
+            .min_h(px(PERMISSION_ROW_HEIGHT))
             .when(!enabled, |row| row.opacity(0.45))
             .px(px(8.0))
             .py(px(5.0))
-            .when(mode == PermissionMode::Custom, |row| {
-                row.pl(px(9.0)).pr(px(7.0))
-            })
-            // CDP 99–101: `rounded-lg` resolves to 12.5px in this desktop
-            // build, including both hover-highlighted and keyboard-focused rows.
-            .rounded(px(12.5))
+            // `rounded-xl` resolves to 15px in this build.
+            .rounded(px(15.0))
             .flex()
             .items_center()
             .cursor_pointer()
@@ -701,50 +700,37 @@ impl ComposerView {
                 cx.stop_propagation();
                 this.activate_permission_mode(mode, cx);
             }))
-            // Although the source SVGs use 20×20 view boxes, the desktop
-            // `icon-sm` token resolves to an 18×18 layout box.
+            // The `icon-sm` glyph is an 18×18 box that starts 7px into the
+            // row; the text column follows 5px later, 30px from the row edge.
             .child(
                 icon(glyph, color.into())
+                    .flex_none()
                     .size(px(18.0))
+                    .ml(px(-1.0))
                     .opacity(if keyboard_focused { 1.0 } else { 0.75 })
-                    .group_hover(hover_group.clone(), |glyph| glyph.opacity(1.0))
-                    .when(mode == PermissionMode::Custom, |glyph| glyph.ml(px(-1.0))),
+                    .group_hover(hover_group.clone(), |glyph| glyph.opacity(1.0)),
             )
             .child(
                 div()
                     .min_w(px(0.0))
-                    .flex_1()
+                    // Grow from the text's own width: a zero flex basis would
+                    // give the shrink-to-fit menu no width to size from.
+                    .flex_grow(1.0)
                     .flex()
                     .flex_col()
-                    .ml(px(12.0))
-                    // CoreText's Chinese glyph run is fractionally wider than
-                    // Chromium's system-ui run sampled over CDP.
-                    .text_size(px(12.75))
-                    .when(mode == PermissionMode::Custom, |column| {
-                        column.text_size(px(13.0))
-                    })
-                    .when(mode == PermissionMode::Custom, |column| {
-                        column.font_weight(crate::theme::UI_BODY_FONT_WEIGHT)
-                    })
-                    .line_height(px(18.5625))
-                    // Chromium fits the 21-CJK warning detail exactly in its
-                    // 273px flex slot. CoreText rounds that run just over the
-                    // boundary, so give the selected warning column two
-                    // non-layout pixels without moving the trailing check.
-                    .when(selected && warning, |column| column.mr(px(-2.0)))
+                    .ml(px(5.0))
+                    .whitespace_nowrap()
                     .child(
                         div()
-                            .when(mode == PermissionMode::Custom, |text| {
-                                text.font_weight(crate::theme::UI_BODY_FONT_WEIGHT)
-                            })
+                            .text_size(px(13.0))
+                            .line_height(px(PERMISSION_TITLE_LINE_HEIGHT))
                             .text_color(color)
                             .child(title),
                     )
                     .child(
                         div()
-                            .when(mode == PermissionMode::Custom, |text| {
-                                text.font_weight(crate::theme::UI_BODY_FONT_WEIGHT)
-                            })
+                            .text_size(px(12.0))
+                            .line_height(px(14.0))
                             .text_color(if warning {
                                 theme.warning
                             } else {
@@ -756,34 +742,20 @@ impl ComposerView {
             .when(selected, |row| {
                 row.child(
                     icon("permission-check", color.into())
-                        // `icon-xs` is a 16×16 layout box in the reference.
+                        // `icon-xs` is a 16×16 layout box, 6px after the text.
+                        .flex_none()
                         .size(px(16.0))
-                        .ml(px(12.0))
+                        .ml(px(6.0))
                         .opacity(if keyboard_focused { 1.0 } else { 0.75 })
                         .group_hover(hover_group, |glyph| glyph.opacity(1.0)),
                 )
             })
-    }
-    fn extra_permission_profiles(&self) -> Vec<&crate::agent::AgentPermissionProfile> {
-        self.permission_profiles
-            .iter()
-            .filter(|profile| {
-                !matches!(
-                    profile.id.as_str(),
-                    ":read-only" | ":workspace" | ":danger-full-access"
-                )
-            })
-            .collect()
-    }
-    fn permission_menu_count(&self) -> usize {
-        4 + self.extra_permission_profiles().len()
     }
     pub(super) fn permission_menu(
         &self,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<Div> {
-        let width = 360.0;
         let surface = if self.mode == ThemeMode::Light {
             // The real light popup is a 90%-opaque white surface over the
             // white application background, so its captured pixel is white.
@@ -799,12 +771,14 @@ impl ComposerView {
             .left(px(42.0))
             // CDP: the menu's bottom edge is 1.5px above the 28px trigger.
             .bottom(px(36.5))
-            .w(px(width))
+            // The reference sizes the menu to its widest row (`min-width:
+            // max-content`), so no description wraps.
             .max_h(px(400.0))
             .overflow_y_scroll()
             .track_scroll(&self.permission_menu_scroll)
             .p(px(4.0))
-            .rounded(px(15.0))
+            // `rounded-2xl` resolves to 20px in this build.
+            .rounded(px(20.0))
             .bg(surface)
             .shadow(vec![
                 // ChatGPT uses two 0.5px rings. Keeping them as shadows is
@@ -827,34 +801,6 @@ impl ComposerView {
             .track_focus(&self.permission_menu_focus)
             .on_key_down(cx.listener(Self::handle_permission_menu_key))
             .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
-            .child(
-                div()
-                    .h(px(26.0))
-                    // CoreText's header line box sits one raster row below
-                    // Chromium despite identical CSS metrics.
-                    .relative()
-                    .top(px(-1.0))
-                    .left(px(-1.0))
-                    .px(px(8.0))
-                    .py(px(5.0))
-                    .flex()
-                    .items_start()
-                    .text_size(px(13.0))
-                    .line_height(px(16.0))
-                    .text_color(theme.text_tertiary)
-                    .child(div().flex_1().child(crate::i18n::text("应如何批准 ChatGPT 操作？")))
-                    .child(
-                        div()
-                            .id("permission-learn-more")
-                            .cursor_pointer()
-                            .relative()
-                            .left(px(1.0))
-                            .text_size(px(13.0))
-                            .line_height(px(16.0))
-                            .underline()
-                            .child(crate::i18n::text("了解更多")),
-                    ),
-            )
             .child(self.permission_row(
                 0,
                 PermissionOption {
@@ -888,76 +834,6 @@ impl ComposerView {
                 theme,
                 cx,
             ))
-            .child(self.permission_row(
-                3,
-                PermissionOption {
-                    mode: PermissionMode::Custom,
-                    title: crate::i18n::text("自定义 (config.toml)"),
-                    detail: crate::i18n::text("使用 config.toml 中定义的权限"),
-                    glyph: "permission-custom",
-                },
-                theme,
-                cx,
-            ))
-            .children(
-                self.extra_permission_profiles()
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, profile)| {
-                        let selection =
-                            crate::agent::AgentPermissionMode::Profile(profile.id.clone());
-                        let reason = self.permission_unavailable_reason(&selection);
-                        let selected =
-                            self.permission_selected_profile.as_ref() == Some(&profile.id);
-                        let detail = reason.clone().unwrap_or_else(|| {
-                            let parent = self
-                                .profile_parent(&profile.id)
-                                .map(|parent| crate::i18n::format!("继承 {parent}" => "Inherit {parent}"));
-                            match (&profile.description, parent) {
-                                (Some(description), Some(parent)) => {
-                                    format!("{description} · {parent}")
-                                }
-                                (Some(description), None) => description.clone(),
-                                (None, Some(parent)) => parent,
-                                (None, None) => crate::i18n::text("服务端权限配置").into(),
-                            }
-                        });
-                        div()
-                            .id(("permission-profile", index))
-                            .role(gpui::Role::MenuItem)
-                            .aria_label(profile.id.clone())
-                            .aria_selected(selected)
-                            .px(px(8.))
-                            .py(px(6.))
-                            .min_h(px(42.5625))
-                            .rounded(px(12.5))
-                            .when(reason.is_some(), |row| row.opacity(0.45))
-                            .when(reason.is_none(), |row| {
-                                row.cursor_pointer()
-                                    .hover(move |s| s.bg(theme.sidebar_hover))
-                            })
-                            .when(
-                                self.permission_menu_keyboard_focus
-                                    && self.permission_menu_focused_item == index + 4,
-                                |row| row.bg(theme.sidebar_hover),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.activate_permission_selection(selection.clone(), cx);
-                                cx.stop_propagation();
-                            }))
-                            .child(div().text_size(px(13.)).child(format!(
-                                "{}{}",
-                                if selected { "✓ " } else { "" },
-                                profile.id
-                            )))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(theme.text_tertiary)
-                                    .child(detail),
-                            )
-                    }),
-            )
     }
 }
 
