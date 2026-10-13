@@ -583,6 +583,7 @@ pub(super) fn utility(
 
     div()
         .id(id)
+        .debug_selector(move || id.to_owned())
         .h(px(28.0))
         .px(px(horizontal_padding))
         .rounded_full()
@@ -806,25 +807,30 @@ pub(super) fn context_toolbar(workspace: &WorkspacePresentation, theme: Theme) -
         .map(|branch| SharedString::from(branch.to_owned()));
     div()
         .relative()
+        .debug_selector(|| "composer-toolbar".to_owned())
         .h(px(38.0))
         .mx(px(13.0))
-        // The reference toolbar continues underneath the Composer. Keeping
-        // the extension in a separate background layer preserves the text's
-        // 38px alignment while the later Composer layer masks its lower edge.
+        // The reference's action bar is 42px tall: its 38px row (`py-row`,
+        // 5px above and below a 28px control) ends where the Composer begins,
+        // and the last 4px run underneath it. Keeping the extension in a
+        // separate background layer leaves the row itself centred on the 38px
+        // that stays visible, so a control's hover plate has 5px on both
+        // sides; shifting the bar and the row down together left 34px visible
+        // and pushed the plate against the Composer.
         .child(
             div()
                 .absolute()
-                .top(px(4.0))
+                .debug_selector(|| "composer-toolbar-strip".to_owned())
+                .top_0()
                 .left_0()
                 .w_full()
-                .h(px(52.0))
+                .h(px(42.0))
                 .rounded(px(16.0))
                 .bg(theme.surface_under),
         )
         .child(
             div()
                 .relative()
-                .top(px(4.0))
                 .h(px(38.0))
                 .w_full()
                 .px(px(6.0))

@@ -145,3 +145,50 @@ fn empty_state_names_the_drafts_project_and_branch(cx: &mut gpui::TestAppContext
     assert!(branch.is_none());
     assert!(clear.is_none(), "there is no project to clear");
 }
+
+/// The three controls above the Composer (project, location, branch) hover with
+/// a 28px plate. The reference centres it in the 38px row that ends where the
+/// Composer begins, 5px above and below, and the bar's background starts at the
+/// top of that row. The row used to be painted 4px low, which left 34px
+/// visible: the plate sat 5px under the bar's top and 1px above the Composer.
+#[gpui::test]
+fn composer_toolbar_controls_are_centred_in_the_visible_strip(cx: &mut gpui::TestAppContext) {
+    let handle = cx.add_window(|_, cx| HomeView::new(ThemeMode::Dark, cx));
+    let composer = handle
+        .read_with(cx, |home, _| home.composer.clone())
+        .unwrap();
+    let mut visual = VisualTestContext::from_window(handle.into(), cx);
+    visual.update(|_, cx| {
+        composer.update(cx, |composer, cx| {
+            composer.set_project_label(Some("Echora".into()), cx);
+            composer.set_checkout(Checkout::Branch("main".into()), cx)
+        })
+    });
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+
+    let toolbar = visual
+        .debug_bounds("composer-toolbar")
+        .expect("the empty state shows the toolbar");
+    let strip = visual
+        .debug_bounds("composer-toolbar-strip")
+        .expect("the toolbar paints its background strip");
+    assert_eq!(f32::from(toolbar.size.height), 38.0);
+    assert_eq!(
+        strip.origin.y, toolbar.origin.y,
+        "the strip starts at the top of the 38px row"
+    );
+
+    for id in ["composer-project", "composer-location", "composer-branch"] {
+        let control = visual
+            .debug_bounds(id)
+            .unwrap_or_else(|| panic!("{id} is part of the toolbar"));
+        assert_eq!(f32::from(control.size.height), 28.0, "{id}");
+        let above = f32::from(control.origin.y - toolbar.origin.y);
+        let below = f32::from(toolbar.bottom() - control.bottom());
+        assert!(
+            (above - 5.0).abs() <= 0.5 && (below - 5.0).abs() <= 0.5,
+            "{id} sits {above}px under the top and {below}px above the Composer, \
+             not 5px and 5px"
+        );
+    }
+}
