@@ -85,12 +85,10 @@ enum PermissionMode {
     Request,
     Assist,
     Full,
-    Custom,
 }
 
 impl PermissionMode {
-    /// The permission menu's rows, in order. A custom configuration is kept
-    /// as the current mode but is not offered as a row.
+    /// The three permission modes shared by the trigger and menu.
     const MENU: [Self; 3] = [Self::Request, Self::Assist, Self::Full];
 
     const fn agent_mode(self) -> AgentPermissionMode {
@@ -98,7 +96,6 @@ impl PermissionMode {
             Self::Request => AgentPermissionMode::Request,
             Self::Assist => AgentPermissionMode::Assist,
             Self::Full => AgentPermissionMode::Full,
-            Self::Custom => AgentPermissionMode::Custom,
         }
     }
 }
@@ -176,7 +173,9 @@ pub struct ComposerView {
     connection_event_task: Option<gpui::Task<()>>,
     permission_mode: PermissionMode,
     permission_update_cycle: u64,
-    permission_selected_profile: Option<String>,
+    /// The backend selection can inherit defaults or retain a named profile;
+    /// its presentation always uses one of the three permission modes.
+    permission_selection: AgentPermissionMode,
     permission_confirmation_selection: Option<AgentPermissionMode>,
     permission_catalog_cycle: u64,
     permission_catalog_loading: bool,
@@ -411,9 +410,9 @@ impl ComposerView {
             dictation_cycle: 0,
             permission_ui_enabled: true,
             connection_event_task: None,
-            permission_mode: PermissionMode::Custom,
+            permission_mode: PermissionMode::Request,
             permission_update_cycle: 0,
-            permission_selected_profile: None,
+            permission_selection: AgentPermissionMode::Custom,
             permission_confirmation_selection: None,
             permission_catalog_cycle: 0,
             permission_catalog_loading: false,

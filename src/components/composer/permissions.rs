@@ -38,10 +38,7 @@ impl ComposerView {
         }
     }
     pub(super) fn selected_agent_permission_mode(&self) -> crate::agent::AgentPermissionMode {
-        self.permission_selected_profile
-            .as_ref()
-            .map(|id| crate::agent::AgentPermissionMode::Profile(id.clone()))
-            .unwrap_or_else(|| self.permission_mode.agent_mode())
+        self.permission_selection.clone()
     }
 
     pub(super) fn load_permission_catalog(&mut self, cx: &mut Context<Self>) {
@@ -70,6 +67,12 @@ impl ComposerView {
                             this.permission_config = Some(config);
                             this.permission_profiles = profiles;
                             this.permission_catalog_error = None;
+                            if this.conversation.thread_id.is_none()
+                                && this.permission_selection
+                                    == crate::agent::AgentPermissionMode::Custom
+                            {
+                                this.permission_mode = this.configured_permission_mode(None);
+                            }
                             this.load_effective_permissions(cx);
                         }
                     }
@@ -441,21 +444,85 @@ impl ComposerView {
             Some(id) => Mode::Profile(id.into()),
             None => Mode::Custom,
         };
-        self.set_permission_selection(selection);
+        self.permission_selection = selection;
+        let full = permissions
+            .active_permission_profile
+            .as_ref()
+            .is_some_and(|profile| {
+                self.profile_inherits_full(&profile.id)
+                    || profile
+                        .extends
+                        .as_deref()
+                        .is_some_and(|parent| self.profile_inherits_full(parent))
+            })
+            || permissions
+                .sandbox_policy
+                .as_ref()
+                .and_then(|sandbox| sandbox.get("type"))
+                .and_then(serde_json::Value::as_str)
+                == Some("dangerFullAccess");
+        self.permission_mode = Self::permission_presentation(
+            Some(&permissions.approval_policy),
+            &permissions.approvals_reviewer,
+            full,
+        );
+    }
+
+    fn permission_presentation(
+        approval_policy: Option<&serde_json::Value>,
+        reviewer: &str,
+        full: bool,
+    ) -> PermissionMode {
+        if full && approval_policy.and_then(serde_json::Value::as_str) == Some("never") {
+            PermissionMode::Full
+        } else if matches!(reviewer, "auto_review" | "guardian_subagent") {
+            PermissionMode::Assist
+        } else {
+            PermissionMode::Request
+        }
+    }
+
+    fn configured_permission_mode(&self, profile: Option<&str>) -> PermissionMode {
+        let Some(config) = &self.permission_config else {
+            return PermissionMode::Request;
+        };
+        let profile = profile.or_else(|| {
+            config
+                .effective
+                .get("default_permissions")
+                .and_then(serde_json::Value::as_str)
+        });
+        let full = profile.map_or_else(
+            || {
+                config
+                    .effective
+                    .get("sandbox_mode")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("danger-full-access")
+            },
+            |id| self.profile_inherits_full(id),
+        );
+        Self::permission_presentation(
+            config.effective.get("approval_policy"),
+            config
+                .effective
+                .get("approvals_reviewer")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("user"),
+            full,
+        )
     }
 
     fn set_permission_selection(&mut self, selection: crate::agent::AgentPermissionMode) {
         use crate::agent::AgentPermissionMode as Mode;
-        self.permission_selected_profile = match &selection {
-            Mode::Profile(id) => Some(id.clone()),
-            _ => None,
-        };
-        self.permission_mode = match selection {
+        self.permission_mode = match &selection {
             Mode::Request => PermissionMode::Request,
             Mode::Assist => PermissionMode::Assist,
             Mode::Full => PermissionMode::Full,
-            Mode::Custom | Mode::Profile(_) => PermissionMode::Custom,
+            Mode::Custom => self.configured_permission_mode(None),
+            Mode::Profile(id) => self.configured_permission_mode(Some(id)),
         };
+        self.permission_selection = selection;
     }
 
     pub(super) fn apply_permission_update_result(
@@ -466,6 +533,9 @@ impl ComposerView {
         match result {
             Ok(settings) => {
                 self.set_permission_selection(selection);
+                if let Some(permissions) = &settings.permissions {
+                    self.sync_permission_selection(permissions);
+                }
                 self.apply_agent_event_batch(vec![AgentEvent::ThreadSettingsUpdated(settings)]);
             }
             Err(error) => {
@@ -598,7 +668,6 @@ impl ComposerView {
             PermissionMode::Request => "request",
             PermissionMode::Assist => "assist",
             PermissionMode::Full => "full",
-            PermissionMode::Custom => "custom",
         }
     }
     pub(super) fn permission_label(&self) -> (SharedString, &'static str, gpui::Rgba) {
@@ -617,13 +686,6 @@ impl ComposerView {
                 theme.text_tertiary,
             );
         }
-        if let Some(profile) = &self.permission_selected_profile {
-            return (
-                profile.clone().into(),
-                "permission-custom",
-                theme.text_tertiary,
-            );
-        }
         let (label, icon, color) = match self.permission_mode {
             PermissionMode::Request => (
                 crate::i18n::text("请求批准"),
@@ -636,11 +698,6 @@ impl ComposerView {
                 theme.text_tertiary,
             ),
             PermissionMode::Full => (crate::i18n::text("完全访问"), "permission", theme.warning),
-            PermissionMode::Custom => (
-                crate::i18n::text("自定义"),
-                "permission-custom",
-                theme.text_tertiary,
-            ),
         };
         (label.into(), icon, color)
     }
@@ -661,7 +718,7 @@ impl ComposerView {
             detail,
             glyph,
         } = option;
-        let selected = self.permission_selected_profile.is_none() && self.permission_mode == mode;
+        let selected = self.permission_mode == mode;
         let disabled_reason = self.permission_unavailable_reason(&mode.agent_mode());
         let enabled = disabled_reason.is_none();
         let warning = mode == PermissionMode::Full;

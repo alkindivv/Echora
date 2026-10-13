@@ -106,11 +106,11 @@ impl ComposerView {
     pub fn set_permission_mode_for_capture(&mut self, mode: &str, cx: &mut Context<Self>) {
         self.permission_ui_enabled = true;
         self.permission_mode = match mode {
-            "request" => PermissionMode::Request,
             "assist" => PermissionMode::Assist,
-            "custom" => PermissionMode::Custom,
-            _ => PermissionMode::Full,
+            "full" => PermissionMode::Full,
+            _ => PermissionMode::Request,
         };
+        self.permission_selection = self.permission_mode.agent_mode();
         self.permission_menu_open = false;
         self.permission_menu_keyboard_focus = false;
         cx.notify();
@@ -822,6 +822,7 @@ impl ComposerView {
         };
         if resolved_capture {
             self.permission_mode = PermissionMode::Request;
+            self.permission_selection = self.permission_mode.agent_mode();
             self.conversation.selected_model = "5.6 Sol".to_owned();
             self.conversation.actual_model = Some("5.6 Sol".to_owned());
             self.conversation.selected_effort = "ultra".to_owned();

@@ -75,15 +75,15 @@ node scripts/scan_reference_rpc_methods.mjs /Applications/ChatGPT.app/Contents/R
 
 读取、编辑、保存回执和线程有效权限分别建模。草稿按工作目录保存在内存；关闭设置再打开可以继续。冲突保留 edits，须重新读取并显式核对后再提交新版本；读取失败、连接变化和结果未知均阻止沿用旧版本保存。校验失败保留草稿；写入后回执缺失明确显示结果未知，不自动重试。配置 RPC 超时终止旧 generation，后续显式读取才重建。配置真源始终是 app-server，UI preferences 不持久化这些配置。
 
-`permissionProfile/list` 按 cwd 遍历 nextCursor，拒绝循环游标与重复 id。当前列表 schema 有 `id`、`allowed`、nullable `description`，没有 `extends`；解码兼容服务端可选 extends 扩展，继承关系也从有效配置的 `permissions.<id>.extends` 和 `ActivePermissionProfile.extends` 读取，缺失时不伪造。菜单显示服务端 profile 和禁用原因，内置 `:read-only` 不作为额外选项展示；不显示后续轮次提示和手动重新读取入口。提交前再校验 allowed。固定入口的映射如下：
+`permissionProfile/list` 按 cwd 遍历 nextCursor，拒绝循环游标与重复 id。当前列表 schema 有 `id`、`allowed`、nullable `description`，没有 `extends`；解码兼容服务端可选 extends 扩展，继承关系也从有效配置的 `permissions.<id>.extends` 和 `ActivePermissionProfile.extends` 读取，缺失时不伪造。Composer 入口和菜单仅显示请求批准、帮我批准、完全访问三种模式，并根据有效配置或线程权限同步入口与选中行；未配置默认值的新会话显示请求批准。命名 profile、旧版 sandbox 与 granular 策略保留后台语义，不显示 Custom 或 profile ID；不显示后续轮次提示和手动重新读取入口。提交前再校验 allowed。固定入口的映射如下：
 
 | 入口 | 请求权限 |
 |---|---|
 | 请求权限 | `:workspace`、on-request、user |
 | 智能协助 | `:workspace`、on-request、auto_review |
 | 完整访问权限 | `:danger-full-access`、never、user；先确认 |
-| 自定义 | 继承当前 cwd 的服务端默认配置；既有线程通过无模型轮次的临时 thread/start 解析后 unsubscribe |
-| 服务端命名 profile | 发送所选 id，其他未明确修改的线程设置由服务端决定 |
+
+新会话在用户选择模式前继承当前 cwd 的服务端默认配置；入口的三态展示不会重写配置或请求权限。恢复线程保留服务端命名 profile 与旧版 sandbox，按批准策略、复核者和有效沙盒映射展示。适配器内部的默认配置更新能力仍通过无模型轮次的临时 `thread/start` 解析后 unsubscribe，不作为菜单入口。
 
 首次发送与既有线程更新复用同一权限编码。已有线程先从 start/resume/fork 响应及设置通知建立有效权限快照，不能拿配置文件值替代线程状态。每线程独立串行权限队列，不阻塞其他线程；操作绑定原 threadId、generation 和本地 operationId。waiter 在写 RPC 前注册，RPC 成功与匹配的 `thread/settings/updated` 缺一不可；通知先于响应时暂存，失败不发布成功。匹配校验本次明确发送的 policy、reviewer、profile／sandbox，已确认重复／已知迟到通知不回退状态。
 

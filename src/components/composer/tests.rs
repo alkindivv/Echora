@@ -109,6 +109,7 @@ struct RecordingBackend {
     steer_results: Mutex<Vec<async_channel::Sender<Result<(), String>>>>,
     /// When set, reading a thread's settings fails with this error.
     thread_settings_error: Mutex<Option<String>>,
+    permission_config: Mutex<Option<crate::agent::AgentConfigSnapshot>>,
 }
 
 impl RecordingBackend {
@@ -122,6 +123,7 @@ impl RecordingBackend {
             steers: Mutex::new(Vec::new()),
             steer_results: Mutex::new(Vec::new()),
             thread_settings_error: Mutex::new(None),
+            permission_config: Mutex::new(None),
         })
     }
 
@@ -143,7 +145,36 @@ impl AgentBackend for RecordingBackend {
         &self,
         _cwd: PathBuf,
     ) -> async_channel::Receiver<Result<Vec<AgentPermissionProfile>, String>> {
-        async_channel::bounded(1).1
+        let (sender, receiver) = async_channel::bounded(1);
+        if self.permission_config.lock().unwrap().is_some() {
+            let _ = sender.try_send(Ok(vec![":workspace", ":danger-full-access"]
+                .into_iter()
+                .map(|id| AgentPermissionProfile {
+                    id: id.into(),
+                    description: None,
+                    allowed: true,
+                    extends: None,
+                })
+                .collect()));
+        }
+        receiver
+    }
+
+    fn read_config(
+        &self,
+        _cwd: PathBuf,
+    ) -> async_channel::Receiver<
+        Result<crate::agent::AgentConfigSnapshot, crate::agent::AgentConfigError>,
+    > {
+        let (sender, receiver) = async_channel::bounded(1);
+        let result = self
+            .permission_config
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(crate::agent::AgentConfigError::unavailable);
+        let _ = sender.try_send(result);
+        receiver
     }
 
     fn update_thread_permissions(
@@ -2879,7 +2910,7 @@ fn permission_modes_update_the_label_and_outside_close_dismisses_the_menu() {
 
     assert_eq!(
         app.read_entity(&composer, |c, _| c.permission_mode_name()),
-        "custom"
+        "request"
     );
     app.update_entity(&composer, |composer, cx| {
         composer.enable_permission_ui_for_capture(cx);
@@ -2894,6 +2925,191 @@ fn permission_modes_update_the_label_and_outside_close_dismisses_the_menu() {
 
     app.update_entity(&composer, |composer, cx| composer.close_picker(cx));
     assert!(!app.read_entity(&composer, |c, _| c.permission_menu_open));
+}
+
+#[test]
+fn draft_permission_catalog_resolves_a_menu_mode_without_overriding_inherited_permissions() {
+    use serde_json::json;
+    for (effective, expected) in [
+        (json!({}), PermissionMode::Request),
+        (
+            json!({"approval_policy":null,"approvals_reviewer":null,"default_permissions":null}),
+            PermissionMode::Request,
+        ),
+        (
+            json!({"approval_policy":"on-request","approvals_reviewer":"auto_review"}),
+            PermissionMode::Assist,
+        ),
+        (
+            json!({"approval_policy":"on-request","approvals_reviewer":"guardian_subagent"}),
+            PermissionMode::Assist,
+        ),
+        (
+            json!({"approval_policy":"never","sandbox_mode":"danger-full-access"}),
+            PermissionMode::Full,
+        ),
+        (
+            json!({"approval_policy":"never","default_permissions":":danger-full-access"}),
+            PermissionMode::Full,
+        ),
+        (
+            json!({"approval_policy":"never","default_permissions":"org","permissions":{"org":{"extends":":danger-full-access"}}}),
+            PermissionMode::Full,
+        ),
+        (
+            json!({"approval_policy":"never","default_permissions":":workspace","sandbox_mode":"danger-full-access"}),
+            PermissionMode::Request,
+        ),
+    ] {
+        let mut app = TestApp::new();
+        let backend = RecordingBackend::new();
+        let source: Arc<dyn AgentBackend> = backend.clone();
+        let composer =
+            app.new_entity(|cx| ComposerView::new_with_backend(ThemeMode::Dark, source, cx));
+        app.update_entity(&composer, |composer, cx| {
+            seed_permission_catalog(composer);
+            let mut config = composer.permission_config.clone().unwrap();
+            config.profile_parents = effective
+                .get("permissions")
+                .and_then(serde_json::Value::as_object)
+                .into_iter()
+                .flat_map(|profiles| profiles.iter())
+                .filter_map(|(id, value)| {
+                    Some((id.clone(), value.get("extends")?.as_str()?.to_owned()))
+                })
+                .collect();
+            config.effective = effective.clone();
+            *backend.permission_config.lock().unwrap() = Some(config);
+            composer.apply_model_catalog(test_model_catalog());
+            composer.load_permission_catalog(cx);
+        });
+        app.run_until_parked();
+        app.read_entity(&composer, |composer, _| {
+            assert!(!composer.permission_catalog_loading);
+            assert_eq!(composer.permission_catalog_error, None);
+            assert_eq!(composer.permission_mode, expected, "{effective}");
+            assert!(PermissionMode::MENU.contains(&composer.permission_mode));
+            assert_eq!(
+                composer.selected_agent_permission_mode(),
+                AgentPermissionMode::Custom
+            );
+            assert_ne!(
+                composer.permission_label().0.as_ref(),
+                crate::i18n::text("自定义")
+            );
+        });
+        app.update_entity(&composer, |composer, cx| {
+            composer.submit_prompt("check inherited permissions".into(), cx);
+            assert_eq!(composer.submission_error, None);
+        });
+        assert_eq!(backend.requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            backend.requests.lock().unwrap()[0].permission_mode,
+            AgentPermissionMode::Custom
+        );
+    }
+}
+
+#[test]
+fn refreshing_draft_defaults_keeps_an_explicit_permission_choice() {
+    let mut app = TestApp::new();
+    let backend = RecordingBackend::new();
+    let source: Arc<dyn AgentBackend> = backend.clone();
+    let composer = app.new_entity(|cx| ComposerView::new_with_backend(ThemeMode::Dark, source, cx));
+    app.update_entity(&composer, |composer, cx| {
+        seed_permission_catalog(composer);
+        *backend.permission_config.lock().unwrap() = composer.permission_config.clone();
+        composer.activate_permission_mode(PermissionMode::Assist, cx);
+        composer.refresh_draft_defaults(cx);
+    });
+    app.run_until_parked();
+    app.read_entity(&composer, |composer, _| {
+        assert_eq!(composer.permission_mode, PermissionMode::Assist);
+        assert_eq!(
+            composer.selected_agent_permission_mode(),
+            AgentPermissionMode::Assist
+        );
+    });
+}
+
+#[test]
+fn restored_permissions_and_side_chat_use_a_menu_mode_and_preserve_the_backend_selection() {
+    use serde_json::json;
+    for (policy, reviewer, profile, sandbox, expected, selection) in [
+        (
+            json!("on-request"),
+            "user",
+            None,
+            json!({"type":"workspaceWrite"}),
+            PermissionMode::Request,
+            AgentPermissionMode::Custom,
+        ),
+        (
+            json!({"granular":{"sandbox_approval":true}}),
+            "auto_review",
+            None,
+            json!({"type":"workspaceWrite"}),
+            PermissionMode::Assist,
+            AgentPermissionMode::Custom,
+        ),
+        (
+            json!("never"),
+            "user",
+            None,
+            json!({"type":"dangerFullAccess"}),
+            PermissionMode::Full,
+            AgentPermissionMode::Custom,
+        ),
+        (
+            json!("on-request"),
+            "guardian_subagent",
+            Some(("org", ":workspace")),
+            json!({"type":"workspaceWrite"}),
+            PermissionMode::Assist,
+            AgentPermissionMode::Profile("org".into()),
+        ),
+        (
+            json!("never"),
+            "user",
+            Some(("org-full", ":danger-full-access")),
+            serde_json::Value::Null,
+            PermissionMode::Full,
+            AgentPermissionMode::Profile("org-full".into()),
+        ),
+    ] {
+        let mut app = TestApp::new();
+        let composer = app.new_entity(|cx| ComposerView::new(ThemeMode::Dark, cx));
+        let config = app.update_entity(&composer, |composer, _| {
+            let permissions = AgentEffectivePermissions {
+                approval_policy: policy,
+                approvals_reviewer: reviewer.into(),
+                sandbox_policy: Some(sandbox),
+                active_permission_profile: profile.map(|(id, parent)| {
+                    AgentActivePermissionProfile {
+                        id: id.into(),
+                        extends: Some(parent.into()),
+                    }
+                }),
+            };
+            composer.sync_permission_selection(&permissions);
+            composer.conversation.effective_permissions = Some(permissions);
+            composer.conversation.thread_id = Some("parent".into());
+            assert_eq!(composer.permission_mode, expected);
+            assert_eq!(composer.selected_agent_permission_mode(), selection);
+            composer.side_chat_configuration().unwrap()
+        });
+        let side = app.new_entity(|cx| {
+            ComposerView::new_side_chat(ThemeMode::Dark, RecordingBackend::new(), config, cx)
+        });
+        app.read_entity(&side, |side, _| {
+            assert_eq!(side.permission_mode, expected);
+            assert_eq!(side.selected_agent_permission_mode(), selection);
+            assert_ne!(
+                side.permission_label().0.as_ref(),
+                crate::i18n::text("自定义")
+            );
+        });
+    }
 }
 
 #[test]
@@ -3761,7 +3977,10 @@ fn disallowed_named_profile_is_visible_but_cannot_change_draft_selection() {
         );
         composer
             .activate_permission_selection(AgentPermissionMode::Profile("org-disabled".into()), cx);
-        assert!(composer.permission_selected_profile.is_none());
+        assert_eq!(
+            composer.selected_agent_permission_mode(),
+            AgentPermissionMode::Custom
+        );
         assert!(
             composer
                 .conversation

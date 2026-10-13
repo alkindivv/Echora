@@ -2,7 +2,10 @@
 
 use super::{ComposerView, ConversationChanged, PermissionMode};
 use crate::{
-    agent::{AgentBackend, AgentEffectivePermissions, AgentModel, SideConversationRequest},
+    agent::{
+        AgentBackend, AgentEffectivePermissions, AgentModel, AgentPermissionMode,
+        SideConversationRequest,
+    },
     conversation::ConversationPhase,
     theme::ThemeMode,
 };
@@ -14,7 +17,7 @@ pub(crate) struct SideChatConfiguration {
     pub request: SideConversationRequest,
     models: Vec<AgentModel>,
     permission_mode: PermissionMode,
-    permission_profile: Option<String>,
+    permission_selection: AgentPermissionMode,
     permissions: Option<AgentEffectivePermissions>,
 }
 
@@ -32,7 +35,7 @@ impl ComposerView {
             },
             models: self.conversation.models.clone(),
             permission_mode: self.permission_mode,
-            permission_profile: self.permission_selected_profile.clone(),
+            permission_selection: self.permission_selection.clone(),
             permissions: self.conversation.effective_permissions.clone(),
         })
     }
@@ -54,7 +57,7 @@ impl ComposerView {
         view.conversation.selected_effort = config.request.effort.unwrap_or_default();
         view.conversation.selected_service_tier = config.request.service_tier;
         view.permission_mode = config.permission_mode;
-        view.permission_selected_profile = config.permission_profile;
+        view.permission_selection = config.permission_selection;
         view.conversation.effective_permissions = config.permissions;
         view.conversation.slider_index = view
             .selected_model_entry()
