@@ -739,14 +739,20 @@ impl ComposerView {
         if self.selection_is_default() {
             controls = controls
                 .child(
+                    // The reference's `_ViewToggle` has no width of its own: 4px
+                    // around a 2px/4px content box that holds the label, a 4px
+                    // gap and the chevron. A fixed 58px was the width of the
+                    // two-character Chinese label and clipped "Advanced".
                     div()
                         .id("model-picker-advanced")
+                        .debug_selector(|| "MODEL_PICKER_ADVANCED".to_owned())
                         .h(px(32.0))
-                        .w(px(58.0))
+                        .flex_none()
                         .p(px(4.0))
                         .rounded(px(8.0))
                         .flex()
                         .items_center()
+                        .whitespace_nowrap()
                         .text_color(theme.text_tertiary)
                         .cursor_pointer()
                         .when(focused, |row| row.bg(theme.sidebar_hover))
@@ -760,7 +766,6 @@ impl ComposerView {
                         }))
                         .child(
                             div()
-                                .w_full()
                                 .h_full()
                                 .px(px(4.0))
                                 .py(px(2.0))

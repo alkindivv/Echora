@@ -3578,3 +3578,51 @@ fn generation_rebuild_rejects_stale_permission_selection_before_catalog_reload()
         assert_eq!(composer.permission_mode, PermissionMode::Request);
     });
 }
+
+/// The "Advanced" toggle has no width of its own in the reference: it hugs the
+/// label, a 4px gap and the 12px chevron inside 8px of padding on each side.
+/// With the real UI font the two-character Chinese label makes it 58px wide; a
+/// fixed 58px used to cut "Advanced" short, so its hover plate ended before the
+/// last letters. The test platform has no CJK font, so only the relation between
+/// the languages is asserted here; the 58px itself is checked on the running app.
+#[gpui::test]
+fn advanced_toggle_hugs_its_label_in_every_language(cx: &mut gpui::TestAppContext) {
+    use crate::i18n::{Language, language, set_language};
+    struct RestoreLanguage(Language);
+    impl Drop for RestoreLanguage {
+        fn drop(&mut self) {
+            set_language(self.0);
+        }
+    }
+    let _restore = RestoreLanguage(language());
+
+    let window = cx.add_window(|_, cx| {
+        let mut composer = ComposerView::new(ThemeMode::Dark, cx);
+        composer.apply_model_catalog(test_model_catalog());
+        composer.menu_open = true;
+        composer
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let mut width_in = |language| {
+        set_language(language);
+        visual.update(|window, cx| window.draw(cx).clear(cx));
+        let toggle = visual
+            .debug_bounds("MODEL_PICKER_ADVANCED")
+            .expect("a default selection offers the Advanced toggle");
+        assert_eq!(f32::from(toggle.size.height), 32.0);
+        f32::from(toggle.size.width)
+    };
+
+    let chinese = width_in(Language::SimplifiedChinese);
+    let english = width_in(Language::English);
+    // "Advanced" is several times as wide as "高级" in any font, so a toggle
+    // that hugs its label grows by far more than the 20px asserted here; a fixed
+    // width keeps both equal.
+    assert!(
+        english - chinese > 20.0,
+        "the toggle must grow with its label: {chinese}px in Chinese, {english}px in English"
+    );
+    // 4px padding, 4px content padding, 4px gap and the 12px chevron around the
+    // label leave at least 28px that are not text.
+    assert!(english > 28.0 + 40.0, "English toggle is {english}px wide");
+}
