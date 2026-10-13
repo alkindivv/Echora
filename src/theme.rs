@@ -76,6 +76,11 @@ pub struct Theme {
     pub markdown_text: Rgba,
     pub markdown_link: Rgba,
     pub markdown_file_link: Rgba,
+    /// The accent the conversation draws links and file mentions in
+    /// (`data-tone="accent"` on ChatGPT's inline mentions). Both kinds share
+    /// it, unlike `markdown_link` and `markdown_file_link`, which other
+    /// surfaces still use.
+    pub markdown_accent: Rgba,
     pub markdown_inline_code_text: Rgba,
     pub markdown_inline_code_surface: Rgba,
     pub markdown_code_surface: Rgba,
@@ -233,6 +238,8 @@ impl Theme {
                 markdown_link: rgba(0x2c67c5ff),
                 // CDP: color-mix(in srgb, #2c67c5 80%, #1a1c1f 20%).
                 markdown_file_link: rgba(0x2858a4ff),
+                // CDP, ChatGPT 26.1007: color(srgb 0.180392 0.511373 0.824314).
+                markdown_accent: rgba(0x2e82d2ff),
                 // Values below were resolved from the live ChatGPT desktop
                 // app over CDP. Keeping them semantic prevents theme colors
                 // from changing the Markdown node geometry.
@@ -350,6 +357,8 @@ impl Theme {
                 markdown_link: rgba(0x2c67c5ff),
                 // CDP: color-mix(in srgb, #2c67c5 80%, #ffffff 20%).
                 markdown_file_link: rgba(0x5685d1ff),
+                // CDP, ChatGPT 26.1007: color(srgb 0.585882 0.786667 0.974902).
+                markdown_accent: rgba(0x95c9f9ff),
                 markdown_inline_code_text: rgba(0xffffffff),
                 markdown_inline_code_surface: rgba(0xffffff1b),
                 markdown_code_surface: rgba(0xffffff0d),

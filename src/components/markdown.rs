@@ -654,8 +654,8 @@ impl MarkdownRenderStyle {
             centered_measure: true,
             palette: MarkdownPalette {
                 text: theme.markdown_text,
-                link: theme.markdown_link,
-                file_link: theme.markdown_file_link,
+                link: theme.markdown_accent,
+                file_link: theme.markdown_accent,
                 inline_code_text: theme.markdown_inline_code_text,
                 inline_code_surface: theme.markdown_inline_code_surface,
                 code_surface: theme.markdown_code_surface,
@@ -1356,6 +1356,19 @@ fn render_styled_text(
     render_styled_text_with_state(inlines, style, base_weight, InlineState::default(), fade)
 }
 
+/// The text of inlines that are nothing but plain text, which an element's own
+/// text style can draw; anything formatted needs a style per run.
+fn plain_text_of(inlines: &[MarkdownInline]) -> Option<String> {
+    let mut text = String::new();
+    for inline in inlines {
+        match inline {
+            MarkdownInline::Text(part) => text.push_str(part),
+            _ => return None,
+        }
+    }
+    Some(text)
+}
+
 fn render_styled_text_with_state(
     inlines: &[MarkdownInline],
     style: MarkdownRenderStyle,
@@ -1571,7 +1584,15 @@ fn render_inline_boxes(
             .link_destination
             .as_deref()
             .is_some_and(|url| url.starts_with("https://github.com/"));
-        let has_icon = file_reference.is_some() || github_reference;
+        // ChatGPT draws every web link as a mention with a leading 16px icon:
+        // GitHub's mark for github.com, a globe (the favicon's fallback) for any
+        // other http(s) address.
+        let web_reference = !github_reference
+            && fragment
+                .link_destination
+                .as_deref()
+                .is_some_and(|url| url.starts_with("https://") || url.starts_with("http://"));
+        let has_icon = file_reference.is_some() || github_reference || web_reference;
         let linked_inline_code = matches!(
             fragment.link_content.as_deref(),
             Some([MarkdownInline::Code(_)])
@@ -1628,18 +1649,23 @@ fn render_inline_boxes(
                     .text_size(px(font_size))
                     .line_height(px(line_height))
             })
-            .when(has_icon, |element| {
-                element.px(px(2.0)).flex().items_center()
-            })
+            // The reference's mention has no padding: the 16px icon with its
+            // 3px right margin is followed directly by the text, and the link
+            // starts and ends where its text does.
+            .when(has_icon, |element| element.flex().items_center())
             .when(fragment.trailing_space, |element| {
                 element.mr(px(font_size * 0.25))
             });
         if has_icon {
             element = element.child(
                 icon(
-                    file_reference
-                        .map(markdown_file_reference_icon)
-                        .unwrap_or("markdown-github"),
+                    file_reference.map(markdown_file_reference_icon).unwrap_or(
+                        if github_reference {
+                            "markdown-github"
+                        } else {
+                            "markdown-link-globe"
+                        },
+                    ),
                     color.into(),
                 )
                 .size(px(16.0))
@@ -1650,13 +1676,19 @@ fn render_inline_boxes(
         let text = if let Some(link_content) = fragment.link_content.as_deref()
             && file_reference.is_none()
         {
-            render_styled_text_with_state(
-                link_content,
-                style,
-                FontWeight::MEDIUM,
-                fragment.state,
-                &MarkdownFadeHandle::none(),
-            )
+            match plain_text_of(link_content) {
+                // Explicit runs ignore the text style the element inherits, so
+                // a link drawn from them never showed its hover underline. Plain
+                // text takes the element's own style (weight, colour, underline).
+                Some(plain) => StyledText::new(plain),
+                None => render_styled_text_with_state(
+                    link_content,
+                    style,
+                    FontWeight::MEDIUM,
+                    fragment.state,
+                    &MarkdownFadeHandle::none(),
+                ),
+            }
         } else {
             let label = if file_reference.is_some() {
                 markdown_file_reference_label(
@@ -1722,8 +1754,17 @@ fn render_inline_boxes(
             let file_reference = markdown_file_reference_path(&destination).map(str::to_owned);
             element
                 .id(link_id)
-                .cursor_pointer()
-                .hover(|element| element.underline())
+                // Every interactive element of the reference reports
+                // `cursor: default`, links included.
+                .cursor_default()
+                .hover(|mut element| {
+                    // `text-decoration-thickness: 0.5px`, in the link's own colour.
+                    element.text_style().underline = Some(UnderlineStyle {
+                        thickness: px(0.5),
+                        ..Default::default()
+                    });
+                    element
+                })
                 .on_click(move |_, window, cx| {
                     if let Some(file_reference) = &file_reference {
                         let line = destination
@@ -3401,7 +3442,11 @@ fn main() {}
         let dark = MarkdownRenderStyle::new(Theme::for_mode(ThemeMode::Dark));
         assert_eq!(light.layout, dark.layout);
         assert_ne!(light.palette, dark.palette);
-        assert_eq!(light.palette.link, dark.palette.link);
+        // Links take the accent of the theme: ChatGPT 26.1007 computes
+        // `color(srgb 0.180392 0.511373 0.824314)` in light and
+        // `color(srgb 0.585882 0.786667 0.974902)` in dark.
+        assert_eq!(light.palette.link, rgba(0x2e82d2ff));
+        assert_eq!(dark.palette.link, rgba(0x95c9f9ff));
     }
 
     #[test]
@@ -3430,6 +3475,30 @@ fn main() {}
         );
         assert!(links[0].link_content.is_some());
         assert!(links[0].state.link);
+    }
+
+    #[test]
+    fn only_plain_link_text_can_take_the_elements_hover_underline() {
+        assert_eq!(
+            plain_text_of(&[MarkdownInline::Text("IEEE 官方模板选择器".into())]),
+            Some("IEEE 官方模板选择器".to_owned())
+        );
+        assert_eq!(
+            plain_text_of(&[
+                MarkdownInline::Text("a ".into()),
+                MarkdownInline::Text("b".into()),
+            ]),
+            Some("a b".to_owned())
+        );
+        // Formatted content needs a style per run, so it keeps explicit runs.
+        assert_eq!(
+            plain_text_of(&[
+                MarkdownInline::Text("a ".into()),
+                MarkdownInline::Strong(vec![MarkdownInline::Text("b".into())]),
+            ]),
+            None
+        );
+        assert_eq!(plain_text_of(&[MarkdownInline::Code("b".into())]), None);
     }
 
     #[test]
@@ -3470,8 +3539,11 @@ fn main() {}
 
         let light = MarkdownRenderStyle::new(Theme::for_mode(ThemeMode::Light)).palette;
         let dark = MarkdownRenderStyle::new(Theme::for_mode(ThemeMode::Dark)).palette;
-        assert_eq!(light.file_link, rgba(0x2858a4ff));
-        assert_eq!(dark.file_link, rgba(0x5685d1ff));
+        // ChatGPT 26.1007 draws links and file mentions in one accent colour.
+        assert_eq!(light.file_link, rgba(0x2e82d2ff));
+        assert_eq!(dark.file_link, rgba(0x95c9f9ff));
+        assert_eq!(light.link, light.file_link);
+        assert_eq!(dark.link, dark.file_link);
     }
 
     fn assert_code_span_coverage(code: &str, spans: &[CodeHighlightSpan]) {
