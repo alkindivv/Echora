@@ -242,7 +242,7 @@ impl SidebarView {
         let hover_id = section_id.clone();
         let menu_id = section_id.clone();
         let reorder_id = section_id.clone();
-        let options = Self::nav_icon_button(
+        let options = Self::quiet_icon_button(
             SharedString::from(format!("custom-section-options-{section_id}")),
             "more-horizontal",
             theme,

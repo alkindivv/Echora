@@ -1659,6 +1659,37 @@ impl SidebarView {
             )
     }
 
+    /// Icon button of the reference's `transparent` variant, which the rows and
+    /// section headings use: it never paints a plate. Hovering it only brightens
+    /// the glyph (`rgba(255 255 255 / .5)` to `rgba(223 223 223 / .85)` in the
+    /// dark theme), so the highlight is the glyph itself and not the 24px
+    /// button around it. `nav_icon_button` is the `ghost` variant of the
+    /// header's search and navigation buttons, which does paint a plate.
+    fn quiet_icon_button(
+        id: impl Into<gpui::ElementId>,
+        glyph: &'static str,
+        theme: Theme,
+    ) -> gpui::Stateful<Div> {
+        div()
+            .id(id)
+            .size(px(24.0))
+            .rounded(px(ICON_BUTTON_RADIUS))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .group(ICON_BUTTON_GROUP)
+            .child(
+                icon(glyph, theme.sidebar_icon_muted.into())
+                    .size(px(16.0))
+                    .group_hover(ICON_BUTTON_GROUP, move |style| {
+                        style.text_color(theme.sidebar_text)
+                    }),
+            )
+    }
+
+    /// The pin and archive buttons of a task row: the same `transparent`
+    /// variant as `quiet_icon_button`, at the row's own size.
     fn action_icon_button(
         id: impl Into<gpui::ElementId>,
         glyph: &'static str,
@@ -1673,13 +1704,18 @@ impl SidebarView {
             .flex()
             .items_center()
             .justify_center()
+            .group(ICON_BUTTON_GROUP)
             .when(pending, |button| button.opacity(0.4).cursor_default())
-            .when(!pending, |button| {
-                button.cursor_pointer().hover(move |style| {
-                    style.bg(theme.sidebar_hover).text_color(theme.sidebar_text)
-                })
-            })
-            .child(icon(glyph, theme.sidebar_icon_muted.into()).size(px(16.0)))
+            .when(!pending, |button| button.cursor_pointer())
+            .child(
+                icon(glyph, theme.sidebar_icon_muted.into())
+                    .size(px(16.0))
+                    .when(!pending, |glyph| {
+                        glyph.group_hover(ICON_BUTTON_GROUP, move |style| {
+                            style.text_color(theme.sidebar_text)
+                        })
+                    }),
+            )
     }
 
     fn static_nav_row(
@@ -2335,7 +2371,7 @@ impl SidebarView {
             .gap(px(6.0))
             .when(!hovered && !menu_open, |actions| actions.invisible())
             .child(
-                Self::nav_icon_button(
+                Self::quiet_icon_button(
                     format!("project-menu-{project_id}"),
                     "more-horizontal",
                     theme,
@@ -2354,11 +2390,15 @@ impl SidebarView {
                 ),
             )
             .child(
-                Self::nav_icon_button(format!("project-new-chat-{project_id}"), "new-chat", theme)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.new_conversation(Some(&new_chat_project), cx);
-                    })),
+                Self::quiet_icon_button(
+                    format!("project-new-chat-{project_id}"),
+                    "new-chat",
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.new_conversation(Some(&new_chat_project), cx);
+                })),
             );
         let title = if rename_active {
             self.rename_input.clone().into_any_element()
@@ -2785,6 +2825,7 @@ impl SidebarView {
                     .child(
                         div()
                             .id(format!("thread-hover-title-{thread_id}"))
+                            .debug_selector(|| "THREAD_HOVER_TITLE".to_owned())
                             .ml(px(-THREAD_HOVER_TITLE_INSET))
                             .min_w(px(0.0))
                             .px(px(THREAD_HOVER_TITLE_PADDING_X))
@@ -2825,11 +2866,11 @@ impl SidebarView {
                     .line_height(px(THREAD_HOVER_ROW_HEIGHT))
                     .text_color(theme.text_tertiary)
                     .child(duration),
-                            .debug_selector(|| "THREAD_HOVER_TITLE".to_owned())
             );
 
         div()
             .id(format!("thread-hover-card-{thread_id}"))
+            .debug_selector(|| "THREAD_HOVER_CARD".to_owned())
             .w(px(THREAD_HOVER_CARD_WIDTH))
             .px(px(THREAD_HOVER_CARD_PADDING_X))
             .py(px(THREAD_HOVER_CARD_PADDING_Y))
@@ -2869,8 +2910,8 @@ impl SidebarView {
             .when_some(project, |card, project| {
                 card.child(
                     div()
+                        .debug_selector(|| "THREAD_HOVER_PROJECT".to_owned())
                         .w_full()
-            .debug_selector(|| "THREAD_HOVER_CARD".to_owned())
                         .min_w(px(0.0))
                         .h(px(THREAD_HOVER_ROW_HEIGHT))
                         .flex()
@@ -2910,7 +2951,6 @@ impl SidebarView {
             )
     }
 
-                        .debug_selector(|| "THREAD_HOVER_PROJECT".to_owned())
     /// The reference's hover-card `pr` section: the chip's pull request (its
     /// title, or its state) opening the pull request, and a "Merge conflicts"
     /// row when GitHub reports them.
@@ -3095,14 +3135,14 @@ impl SidebarView {
             .supports(AgentCapability::ProjectCreate);
         let pinned_ids = self.sectioned_thread_ids();
         let sectioned_projects = self.sectioned_project_ids();
-        let menu_button = Self::nav_icon_button("projects-options", "more-horizontal", theme)
+        let menu_button = Self::quiet_icon_button("projects-options", "more-horizontal", theme)
             .on_click(cx.listener(|this, _, _, cx| {
                 cx.stop_propagation();
                 this.projects_section_menu_open = !this.projects_section_menu_open;
                 this.project_menu_id = None;
                 cx.notify();
             }));
-        let add_button = Self::nav_icon_button("project-add", "add", theme)
+        let add_button = Self::quiet_icon_button("project-add", "add", theme)
             .when(!can_create, |button| button.opacity(0.4).cursor_default())
             .when(can_create, |button| {
                 button.on_click(cx.listener(|_, _, _, cx| {
@@ -4620,6 +4660,8 @@ mod tests {
         /// rename it is asked to perform.
         thread_rename: bool,
         renames: Mutex<Vec<String>>,
+        /// Title of the one task the fixture lists.
+        title: &'static str,
     }
 
     impl SidebarBackend {
@@ -4639,6 +4681,19 @@ mod tests {
                 projectless,
                 thread_rename: false,
                 renames: Mutex::new(Vec::new()),
+                title: "Stable thread",
+            })
+        }
+
+        fn with_title(title: &'static str) -> Arc<Self> {
+            let (events, event_receiver) = async_channel::unbounded();
+            Arc::new(Self {
+                _events: events,
+                event_receiver,
+                projectless: false,
+                thread_rename: false,
+                renames: Mutex::new(Vec::new()),
+                title,
             })
         }
 
@@ -4650,6 +4705,7 @@ mod tests {
                 projectless: false,
                 thread_rename: true,
                 renames: Mutex::new(Vec::new()),
+                title: "Stable thread",
             })
         }
 
@@ -4660,8 +4716,6 @@ mod tests {
 
     impl AgentBackend for SidebarBackend {
         fn capabilities(&self) -> AgentCapabilities {
-        /// Title of the one task the fixture lists.
-        title: &'static str,
             let mut capabilities = vec![
                 AgentCapability::ProjectList,
                 AgentCapability::ThreadList,
@@ -4681,19 +4735,6 @@ mod tests {
             self.renames
                 .lock()
                 .expect("rename log")
-                title: "Stable thread",
-            })
-        }
-
-        fn with_title(title: &'static str) -> Arc<Self> {
-            let (events, event_receiver) = async_channel::unbounded();
-            Arc::new(Self {
-                _events: events,
-                event_receiver,
-                projectless: false,
-                thread_rename: false,
-                renames: Mutex::new(Vec::new()),
-                title,
                 .push(format!("{thread_id}:{name}"));
             response(Ok(()))
         }
@@ -4705,7 +4746,6 @@ mod tests {
         fn load_model_catalog(&self) -> Receiver<Result<AgentModelCatalog, String>> {
             response(Err("not used".to_owned()))
         }
-                title: "Stable thread",
 
         fn load_permission_profiles(
             &self,
@@ -5218,46 +5258,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn projectless_tasks_never_open_a_hover_card() {
-        static SERIAL: AtomicU64 = AtomicU64::new(1);
-        let preferences = std::env::temp_dir()
-            .join(format!(
-                "gpui-sidebar-projectless-{}-{}",
-                std::process::id(),
-                SERIAL.fetch_add(1, Ordering::Relaxed)
-            ))
-            .join("preferences.json");
-        let store = WorkspaceStore::with_preferences_path(
-            SidebarBackend::projectless(),
-            preferences.clone(),
-        );
-        store.refresh_all();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while store.snapshot().loading.recent {
-            assert!(Instant::now() < deadline, "sidebar fixture did not load");
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let mut app = TestApp::new();
-        let mut window = app.open_window_with_options(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds {
-                    origin: point(px(0.0), px(0.0)),
-                    size: size(px(900.0), px(700.0)),
-                })),
-                ..Default::default()
-            },
-            |_, cx| SidebarView::new(ThemeMode::Dark, false, store, cx),
-        );
-        window.draw();
-        let row = window.read(|sidebar, _| {
-            *sidebar
-                .thread_row_bounds
-                .borrow()
-                .get("thread-stable-id")
-                .expect("the rendered task row records its bounds")
-        });
-        window.simulate_mouse_move(point(
     /// Opens the hover card of the fixture's only task and returns the bounds
     /// of the card, its title, and its project row.
     fn thread_hover_card_bounds(
@@ -5371,6 +5371,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn projectless_tasks_never_open_a_hover_card() {
+        static SERIAL: AtomicU64 = AtomicU64::new(1);
+        let preferences = std::env::temp_dir()
+            .join(format!(
+                "gpui-sidebar-projectless-{}-{}",
+                std::process::id(),
+                SERIAL.fetch_add(1, Ordering::Relaxed)
+            ))
+            .join("preferences.json");
+        let store = WorkspaceStore::with_preferences_path(
+            SidebarBackend::projectless(),
+            preferences.clone(),
+        );
+        store.refresh_all();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while store.snapshot().loading.recent {
+            assert!(Instant::now() < deadline, "sidebar fixture did not load");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut app = TestApp::new();
+        let mut window = app.open_window_with_options(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                    origin: point(px(0.0), px(0.0)),
+                    size: size(px(900.0), px(700.0)),
+                })),
+                ..Default::default()
+            },
+            |_, cx| SidebarView::new(ThemeMode::Dark, false, store, cx),
+        );
+        window.draw();
+        let row = window.read(|sidebar, _| {
+            *sidebar
+                .thread_row_bounds
+                .borrow()
+                .get("thread-stable-id")
+                .expect("the rendered task row records its bounds")
+        });
+        window.simulate_mouse_move(point(
             row.origin.x + row.size.width / 2.0,
             row.origin.y + row.size.height / 2.0,
         ));
