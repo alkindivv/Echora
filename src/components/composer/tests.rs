@@ -3494,7 +3494,10 @@ fn model_picker_keyboard_selects_a_model_keeps_the_menu_open_and_escapes() {
         |_, cx| ComposerView::new(ThemeMode::Dark, cx),
     );
     window.update(|composer, window, cx| {
-        composer.apply_model_catalog(test_model_catalog());
+        let mut catalog = test_model_catalog();
+        catalog.models[0].supported_reasoning_efforts =
+            catalog.models[1].supported_reasoning_efforts.clone();
+        composer.apply_model_catalog(catalog);
         composer.open_picker(cx);
         window.focus(&composer.model_menu_focus, cx);
     });
@@ -3542,6 +3545,27 @@ fn model_picker_trigger_closes_on_a_second_click_and_dismisses_outside(
         .center();
     visual.simulate_click(trigger, Default::default());
     assert!(entity.read_with(&visual, |composer, _| composer.menu_open));
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    let menu = visual.debug_bounds("MODEL_PICKER_MENU").unwrap();
+    visual.update(|window, cx| {
+        let trigger = entity.read(cx).model_trigger_bounds.get().unwrap();
+        let margin = px(8.) + window.client_inset().unwrap_or_default();
+        let half_width = px(super::MODEL_PICKER_WIDTH / 2.);
+        let expected_center = trigger.center().x.clamp(
+            margin + half_width,
+            window.viewport_size().width - margin - half_width,
+        );
+        assert!(
+            (menu.center().x - expected_center).abs() < px(1.),
+            "menu: {menu:?}, expected center: {expected_center:?}"
+        );
+        let desired_bottom = trigger.top() - px(super::MODEL_PICKER_MENU_GAP);
+        if desired_bottom < menu.size.height + margin {
+            assert!(menu.top() >= px(0.) && menu.top() <= margin);
+        } else {
+            assert_eq!(menu.bottom(), desired_bottom);
+        }
+    });
     visual.simulate_click(trigger, Default::default());
     assert!(!entity.read_with(&visual, |composer, _| composer.menu_open));
     visual.simulate_click(trigger, Default::default());
@@ -4082,6 +4106,11 @@ fn project_picker_search_selection_clear_and_first_request_use_the_draft_target(
             .input
             .update(cx, |input, cx| input.set_text_silently("chosen-root", cx));
         c.project_picker.open = true;
+        assert!(
+            c.project_choices(cx)
+                .iter()
+                .any(|choice| matches!(choice, ProjectChoice::Create))
+        );
         c.confirm_project_picker(cx);
         assert!(!c.project_picker.open);
         assert_eq!(c.prompt_editor.read(cx).text(), "preserved text");
@@ -4107,4 +4136,56 @@ fn project_picker_search_selection_clear_and_first_request_use_the_draft_target(
         assert_eq!(c.conversation.cwd, super::projectless_cwd());
         assert!(c.conversation.project_id.is_none());
     });
+}
+
+#[gpui::test]
+fn project_picker_clear_has_an_independent_keyboard_target(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(|_, cx| {
+        let mut composer = ComposerView::new(ThemeMode::Dark, cx);
+        composer.conversation.project_id = Some("chosen".into());
+        composer.conversation.cwd = PathBuf::from("/tmp/chosen");
+        composer.set_project_label(Some("Chosen".into()), cx);
+        composer
+    });
+    let entity = cx.update(|cx| window.root(cx).unwrap());
+    let selected = Arc::new(Mutex::new(Vec::new()));
+    let events = selected.clone();
+    cx.update(|cx| {
+        cx.subscribe(&entity, move |_, event: &super::DraftProjectSelected, _| {
+            events.lock().unwrap().push(event.0.clone());
+        })
+        .detach();
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        let focus = entity.read(cx).project_picker.clear_focus.clone();
+        focus.focus(window, cx);
+        window.draw(cx).clear(cx);
+    });
+    visual.simulate_keystrokes("enter");
+    assert_eq!(selected.lock().unwrap().as_slice(), &[None]);
+    assert!(!entity.read_with(&visual, |composer, _| composer.project_picker.open));
+}
+
+#[gpui::test]
+fn model_choice_without_an_adjustable_effort_closes_the_list(cx: &mut gpui::TestAppContext) {
+    let window = cx.add_window(|_, cx| {
+        let mut composer = ComposerView::new(ThemeMode::Dark, cx);
+        let mut catalog = test_model_catalog();
+        catalog.models[0].supported_reasoning_efforts.clear();
+        catalog.models[0].default_reasoning_effort.clear();
+        composer.apply_model_catalog(catalog);
+        composer.open_picker_submenu("model", cx);
+        composer
+    });
+    let entity = cx.update(|cx| window.root(cx).unwrap());
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    let row = visual
+        .debug_bounds("MODEL_PICKER_MODEL_1")
+        .unwrap()
+        .center();
+    visual.simulate_click(row, Default::default());
+    assert!(!entity.read_with(&visual, |composer, _| composer.menu_open));
+    visual.update(|window, cx| assert!(entity.read(cx).model_trigger_focus.is_focused(window)));
 }

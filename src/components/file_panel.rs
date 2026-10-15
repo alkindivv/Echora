@@ -157,6 +157,23 @@ impl FilePanel {
         .detach();
         s
     }
+    pub fn set_workspace_root(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
+        if self.cwd == cwd {
+            return;
+        }
+        self.cwd = cwd.clone();
+        self.expanded = HashSet::from([cwd.clone()]);
+        self.directories.clear();
+        self.loading.clear();
+        self.open_menu = false;
+        self.search(cx);
+        self.load_directory(cwd, cx);
+        cx.notify();
+    }
+    #[cfg(test)]
+    pub(crate) fn workspace_root(&self) -> &std::path::Path {
+        &self.cwd
+    }
     pub fn set_mode(&mut self, mode: ThemeMode, cx: &mut Context<Self>) {
         self.mode = mode;
         self.filter.update(cx, |v, cx| v.set_mode(mode, cx));
@@ -263,9 +280,13 @@ impl FilePanel {
             let p = path.clone();
             async move { file_io::read_directory(&p) }
         });
+        let root = self.cwd.clone();
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |s, cx| {
+                if s.cwd != root {
+                    return;
+                }
                 s.loading.remove(&path);
                 s.directories.insert(path, result);
                 cx.notify();

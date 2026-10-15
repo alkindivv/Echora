@@ -882,6 +882,15 @@ impl TerminalPanel {
         cx.notify();
         id
     }
+    /// Existing shells keep their directory; new tabs use the selected project.
+    pub fn set_workspace_root(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
+        self.cwd = cwd;
+        cx.notify();
+    }
+    #[cfg(test)]
+    pub(crate) fn workspace_root(&self) -> &std::path::Path {
+        &self.cwd
+    }
     pub fn tab_ids(&self) -> Vec<usize> {
         self.tabs.iter().map(|(id, _)| *id).collect()
     }

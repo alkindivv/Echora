@@ -1482,7 +1482,7 @@ fn an_empty_backend_does_not_expose_a_phantom_pinned_menu() {
 }
 
 #[test]
-fn project_creation_dismiss_preserves_form_and_cancel_resets_it() {
+fn project_creation_dismiss_and_cancel_reset_form_and_invalidate_folder_prompts() {
     let mut app = TestApp::new();
     let mut window = app.open_window(|_, cx| ChatApp::new(ThemeMode::Dark, false, cx));
     window.update(|chat, _, cx| {
@@ -1494,14 +1494,9 @@ fn project_creation_dismiss_preserves_form_and_cancel_resets_it() {
         chat.close_project_creation(cx);
         chat.open_project_creation(cx);
     });
-    assert_eq!(
-        window.read(|chat, cx| chat.project_creation.name.read(cx).text().to_owned()),
-        "Research"
-    );
-    assert_eq!(
-        window.read(|chat, _| chat.project_creation.roots.clone()),
-        vec![PathBuf::from("/tmp/research")]
-    );
+    assert!(window.read(|chat, cx| chat.project_creation.name.read(cx).text().is_empty()));
+    assert!(window.read(|chat, _| chat.project_creation.roots.is_empty()));
+    assert_eq!(window.read(|chat, _| chat.project_creation.cycle), 1);
     window.draw();
     window.simulate_keystroke("escape");
     assert!(!window.read(|chat, _| chat.project_creation.open));
@@ -1512,6 +1507,23 @@ fn project_creation_dismiss_preserves_form_and_cancel_resets_it() {
     });
     assert!(window.read(|chat, cx| chat.project_creation.name.read(cx).text().is_empty()));
     assert!(window.read(|chat, _| chat.project_creation.roots.is_empty()));
+}
+
+#[test]
+fn project_creation_tab_keeps_focus_inside_the_dialog() {
+    let mut app = TestApp::new();
+    let mut window = app.open_window(|_, cx| ChatApp::new(ThemeMode::Dark, false, cx));
+    window.update(|chat, _, cx| chat.open_project_creation(cx));
+    window.draw();
+    for key in ["tab", "shift-tab"] {
+        for _ in 0..20 {
+            window.simulate_keystroke(key);
+            window.draw();
+            window.update(|chat, window, cx| {
+                assert!(chat.project_creation.focus.contains_focused(window, cx));
+            });
+        }
+    }
 }
 
 #[test]
@@ -1613,10 +1625,17 @@ fn selecting_draft_project_keeps_text_and_synchronizes_host_and_composer() {
         composer.update(cx, |composer, cx| {
             composer.set_draft_text("Keep this draft", cx)
         });
+        let files = chat.file_panel(cx);
+        let terminals = chat.terminal_panel(cx);
+        chat.ensure_review(cx);
+        let review = chat.review_panels[&chat.active_conversation].clone();
         chat.select_draft_project(&composer, Some("research".into()), cx);
         let host = &chat.conversation_hosts[&chat.active_conversation];
         assert_eq!(host.project_id.as_deref(), Some("research"));
         assert_eq!(host.cwd, PathBuf::from("/tmp/research"));
+        assert_eq!(files.read(cx).workspace_root(), host.cwd);
+        assert_eq!(terminals.read(cx).workspace_root(), host.cwd);
+        assert_eq!(review.read(cx).workspace_root(), host.cwd);
         assert_eq!(
             composer
                 .read(cx)
@@ -1629,6 +1648,9 @@ fn selecting_draft_project_keeps_text_and_synchronizes_host_and_composer() {
         let host = &chat.conversation_hosts[&chat.active_conversation];
         assert_eq!(host.project_id, None);
         assert_eq!(host.cwd, crate::components::composer::projectless_cwd());
+        assert_eq!(files.read(cx).workspace_root(), host.cwd);
+        assert_eq!(terminals.read(cx).workspace_root(), host.cwd);
+        assert_eq!(review.read(cx).workspace_root(), host.cwd);
         assert!(
             composer
                 .read(cx)

@@ -131,7 +131,7 @@ Cargo 包和可执行文件目前仍名为 `gpui-chat-clone`，现有构建与�
 - **实时输出与历史：** 实时与恢复后的已完成轮次共用最终答复选择、工作过程折叠、答复操作与文件汇总。文本增量保留 item 身份，完成消息快照校正显示内容；相邻增量以 8 ms 窗口批处理，代码高亮复用已完成行，仅重解析未结束行。已完成轮次折叠最终答复之前的过程消息，追加的用户消息保留原有位置与附件。用户消息只显示最后一个 `## My request:`（或 `## My request for Codex:`）标题行之后的内容，与 ChatGPT 应用一致，因此其前的附件列表和内置浏览器的环境界面状态不会显示，实时与恢复的消息都是如此。文件变更按路径汇总并保留原始 patch。历史由 app-server 提供，不伪造缺失的时间、计划步骤快照或自动复核历史。
 - **审批：** 并发请求依次显示，提交后等待服务端释放。响应失败可见且不可重复提交。可查看原始请求补丁，展开和复制长命令。使用 Tab / 方向键导航、Enter 激活、Esc 关闭或拒绝；文件审批的 `Shift+Esc` 拒绝并停止轮次。
 - **权限：** 读取服务端 profile 全部页面，以判定实际配置与禁用原因。输入框菜单只提供「请求批准」「帮我批准」「完全访问权限」及其描述；入口标签和选中行统一使用这三种模式。未配置权限默认值的新会话显示「请求批准」；已配置默认值与恢复线程的有效权限决定显示模式。命名 profile 和 granular 策略继续生效，不再把 Custom 或 profile ID 显示为额外模式。已有线程等待 RPC 成功与匹配的设置通知后才显示生效，更新影响后续轮次；复核者变化还会经 `turn/settings/update` 同步到进行中的轮次。完整访问权限需要应用内确认，侧边聊天独立管理权限。线程被另一个 app-server 占用时，警告卡片固定在输入框上方，不随会话滚动。
-- **模型选择器：** 滑块视图与模型列表共用一个弹层。选择模型时保留仍受支持的推理强度与速度；「默认」恢复模型目录的默认设置。配置或恢复的推理强度超出目录内模型的支持范围时，回退到模型默认值。配置或恢复的目录外模型保持选中，显示为「自定义」并提供六档后备推理强度；无法调整推理强度的模型直接打开模型列表。
+- **模型选择器：** 滑块视图与模型列表共用一个弹层。选择模型时保留仍受支持的推理强度与速度；「默认」恢复模型目录的默认设置。配置或恢复的推理强度超出目录内模型的支持范围时，回退到模型默认值。配置或恢复的目录外模型保持选中，显示为「自定义」并提供六档后备推理强度；无法调整推理强度的模型直接打开模型列表，选择后关闭。滑块支持指针拖动、方向键和辅助功能的递增、递减操作。
 - **图片附件：** 显示 122×122 的方形裁切缩略图，并提供预览与移除入口；普通文件仍显示为标签。
 - **账户：** 账户菜单与登录流程都由连接级账户快照驱动。缺失的套餐显示为未知而不是杜撰，登录保留服务端返回的 `loginId` 直到完成通知到达，退出登录先确认再发请求。只提供 Codex 管理的 ChatGPT 登录，API key、外部 token 与 Bedrock 变体返回明确错误。具体协议覆盖见接入总表。
 - **配置：** 使用带版本的 `config/batchWrite` 保存并回读，项目层与受管层只读。冲突保留草稿，结果未知时不自动重试。保存的模型、推理强度、服务等级与个性默认值用于后续线程，不热更新已打开的线程。
@@ -149,7 +149,7 @@ Cargo 包和可执行文件目前仍名为 `gpui-chat-clone`，现有构建与�
 - **压缩上下文：** 斜杠菜单的「压缩」或输入 `/compact` 会执行 `thread/compact/start`；轮次运行中会提示无法压缩。压缩按不可 steer 的轮次运行，期间追加输入会如实展示服务端结论，压缩结果沿用既有 contextCompaction 条目展示。
 - **代码审查：** 「代码审查」子菜单列出「审查未提交的更改」，并在「与基准分支比较」下列出默认目标分支和最多 100 个最近的本地分支（不含当前分支）；在保留的 `/` 后继续输入可以过滤，分支加载失败时提供「重试」。审查始终以 inline 方式发送：选「单独」时先建新聊天（`thread/start`，带 `threadSource: code_review` 与当前权限），因为 0.158 拒绝对分页线程使用 detached。轮次运行中不能开始审查。服务端会用另一个永不完成的 turn id 宣告审查轮次，Echora 会丢弃它，不接管这个虚假轮次。恢复的审查轮次与实时一样显示请求文本和「审查模式」标记。
 - **Shell 命令：** 输入框以 `!` 开头时（侧边聊天、编辑队列项和目标草稿除外），底部显示警告标签「Shell · 在沙盒外运行」；按 Enter 发送这一行的其余部分，新聊天会先建立线程。服务端的 user-shell 轮次显示为默认展开的命令卡片，状态有运行中、完成、失败、超时和中断。命令被拒绝时文字放回输入框并提示。ChatGPT 没有这个入口。
-- **创建项目**：源文件夹会转为规范路径并去重；取消重置表单，Esc、关闭按钮与遮罩关闭时保留表单。创建失败保留名称、标记和已准备的目录以供重试。app-server 项目没有外观字段，项目标记保存在本机 UI 偏好。设备菜单支持此电脑；尚未实现远程主机连接。表情符号目录使用 Unicode Emoji 17.0 数据，许可见 `assets/UNICODE-LICENSE.txt`。
+- **创建项目**：源文件夹会转为规范路径并去重；取消、Esc、关闭按钮与遮罩关闭时重置表单，并丢弃尚未完成的文件夹选择。创建失败保留名称、标记和已准备的目录以供重试。键盘焦点保持在对话框内。app-server 项目没有外观字段，项目标记保存在本机 UI 偏好。设备菜单与参考应用的本机设备菜单一致，提供“此电脑”；尚未实现远程主机连接。表情符号目录使用 Unicode Emoji 17.0 数据，许可见 `assets/UNICODE-LICENSE.txt`。
 - **自定义分区：** 分区及其中的聊天保存在服务端（`threadSection/*`、`thread/section/move`）；分区顺序、分区内的项目和折叠状态是本地 UI 偏好。移除分区后，其中的聊天回到「最近」。分区头菜单提供「在{分区}中新建聊天」「编辑」「归档聊天」「全部标为已读」「移除分区」；聊天与项目菜单提供「移至分区」和「新建分区…」。
 - **提供方能力与记忆状态：** `modelProvider/capabilities/read` 门控「设置 → 配置」的网页搜索（提供方不支持时只能选「已禁用」，并说明原因）以及图片生成失败后的重试；`memory/status` 在「设置 → 个性化」增加「记忆整合」行，并在「聊天记忆」对话框显示状态。ChatGPT 不展示这两项，均为 Echora 新增。`thread/loaded/list` 在打开线程时核对本地的已加载记录，服务端不再持有该线程时会重新 resume。
 - **任务附件与后台终端：** 关联到聊天的拉取请求来自 `thread/attachment/list`（每页 99 条，因为 0.158 在单页超过 100 条时会丢弃其余部分），只在关联找到的或新创建的拉取请求时写入，从不因识别到命令而写入；服务端不支持附件时由 UI 偏好中的本地镜像代替。拉取请求状态在后台通过 `gh` 读取，读不到时不显示；没有附件记录的旧聊天显示其分支的拉取请求，并与 ChatGPT 一样回填一次。停止后台终端时一次请求停止该聊天的全部终端，请求期间显示加载图标，失败只提示一次且不重试；命令卡片只在服务端完成该命令后才变为「Ran …」。`thread/metadata/update` 在每次发送后以及识别到 `git checkout`／`switch` 后记录聊天的分支。摘要面板的其他分区、环境与 Git 操作菜单以及托管 worktree 尚未实现。
@@ -319,6 +319,7 @@ node scripts/cdp_pin_reference_layout.mjs --layout=legacy --wait=60
 |---|---|
 | 真实线程双主题 | `python3 scripts/capture_resume_reference.py --endpoint "$CHATGPT_CDP_HTTP" --manifest /path/to/manifest.json`；`python3 scripts/capture_resume_gpui.py --manifest /path/to/manifest.json --output artifacts/resume-alignment/actual` |
 | 终端 / 文件 | `node scripts/cdp_capture_terminal.mjs artifacts/terminal`；`node scripts/cdp_capture_file_panel.mjs artifacts/file-panel` |
+| 项目与模型控件 | `CHATGPT_CDP_HTTP="$CHATGPT_CDP_HTTP" node scripts/verify_project_composer_reference.mjs --output=artifacts/project-composer/reference` 驱动专用旧版参考实例，检查项目搜索、创建、取消、不在项目中工作、模型选择、推理强度与重置，并保存截图和几何数据。`cargo test project` 与 `cargo test model_picker` 验证原生指针、键盘、焦点、草稿目录同步及菜单状态。 |
 | 审查 / 侧边聊天 | `node scripts/cdp_capture_review.mjs artifacts/review-reference`；`node scripts/cdp_capture_side_chat.mjs artifacts/side-chat reference` |
 | 审查弹层 | `node scripts/cdp_capture_review_menus.mjs --output=artifacts/review-menus` 采集比较范围、查看选项与分支选择三个弹层，双主题并附带计算样式；`python3 scripts/compare_review_menus.py --reference DIR --gpui DIR --output DIR --scale 2` 逐像素比对两侧截图，输出裁切图、差异图与报告 |
 | 账户菜单、退出登录 | `node scripts/cdp_capture_account.mjs --output artifacts/account-phase/chatgpt-reference --theme=light`；`scripts/capture_account_gpui.sh`；`python3 scripts/compare_account_phase.py` |

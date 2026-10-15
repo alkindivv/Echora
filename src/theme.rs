@@ -217,7 +217,7 @@ impl Theme {
                 surface_under: rgba(0xf6f6f6ff),
                 elevated: rgba(0xffffffff),
                 model_picker_surface: rgba(0xfafafaff),
-                project_dialog_surface: rgba(0xfafafaff),
+                project_dialog_surface: rgba(0xfdfcfcff),
                 control: rgba(0xffffffff),
                 control_soft: rgba(0xffffffff),
                 // chat-reference: --color-background-primary-ghost-hover
@@ -336,7 +336,7 @@ impl Theme {
                 model_picker_surface: rgba(0x2c2c2cff),
                 // Captured opaque result of elevated-secondary/90 over the
                 // canonical new-conversation background.
-                project_dialog_surface: rgba(0x2b2b2bff),
+                project_dialog_surface: rgba(0x2b2a2aff),
                 control: rgba(0x2d2d2dff),
                 control_soft: rgba(0x2d2d2dff),
                 // chat-reference: --color-background-primary-ghost-hover

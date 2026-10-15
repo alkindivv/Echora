@@ -115,6 +115,15 @@ impl ChatApp {
         }
         host.cwd = cwd.clone();
         host.project_id = project_id.clone();
+        if let Some(panel) = self.file_panels.get(&self.active_conversation) {
+            panel.update(cx, |panel, cx| panel.set_workspace_root(cwd.clone(), cx));
+        }
+        if let Some(panel) = self.terminal_panels.get(&self.active_conversation) {
+            panel.update(cx, |panel, cx| panel.set_workspace_root(cwd.clone(), cx));
+        }
+        if let Some(panel) = self.review_panels.get(&self.active_conversation) {
+            panel.update(cx, |panel, cx| panel.set_workspace_root(cwd.clone(), cx));
+        }
         composer.update(cx, |composer, cx| {
             composer.set_workspace_context(cwd, project_id.clone(), None, cx)
         });

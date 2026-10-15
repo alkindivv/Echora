@@ -135,6 +135,8 @@ pub(super) struct ProjectCreationState {
     pub(super) previous_focus: Option<FocusHandle>,
     pub(super) focus: FocusHandle,
     pub(super) focus_pending: bool,
+    pub(super) close_focus: FocusHandle,
+    pub(super) device_focus: FocusHandle,
 }
 
 impl ProjectCreationState {
@@ -169,6 +171,8 @@ impl ProjectCreationState {
             previous_focus: None,
             focus: cx.focus_handle().tab_stop(true),
             focus_pending: false,
+            close_focus: cx.focus_handle().tab_stop(true),
+            device_focus: cx.focus_handle().tab_stop(true),
         }
     }
 }

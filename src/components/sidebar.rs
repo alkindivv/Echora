@@ -5209,11 +5209,15 @@ mod tests {
                 .get("project-stable-id")
                 .unwrap()
         });
-        let target = point(row.right() - px(12.), row.center().y);
-        window.simulate_mouse_move(target);
-        window.draw();
-        window.simulate_click(target, MouseButton::Left);
-        assert_eq!(events.lock().unwrap().len(), 1);
+        for dx in [-11., 0., 11.] {
+            for dy in [-11., 0., 11.] {
+                let target = point(row.right() - px(12.) + px(dx), row.center().y + px(dy));
+                window.simulate_mouse_move(target);
+                window.draw();
+                window.simulate_click(target, MouseButton::Left);
+            }
+        }
+        assert_eq!(events.lock().unwrap().len(), 9);
         assert_eq!(
             events.lock().unwrap()[0].project_id.as_deref(),
             Some("project-stable-id")

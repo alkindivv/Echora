@@ -1069,7 +1069,7 @@ impl Render for ChatApp {
                     )
             })
             .when(self.project_creation.open, |shell| {
-                shell.child(self.project_creation_overlay(theme, cx))
+                shell.child(self.project_creation_overlay(theme, window, cx))
             })
             .when(self.chat_search.read(cx).is_open(), |shell| {
                 shell.child(self.chat_search.clone())

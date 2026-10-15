@@ -647,37 +647,6 @@ pub(super) fn project_utility(label: Option<SharedString>, theme: Theme) -> gpui
                 )
                 .child(label.unwrap_or_else(|| crate::i18n::text("选择项目").into())),
         )
-        // The reference overlays a 28px clear-project control on the leading
-        // edge and swaps it with the folder whenever the project trigger is
-        // hovered. Only this nested control promotes tertiary -> primary.
-        .when(has_project, |project| {
-            project.child(
-                div()
-                    .id("composer-clear-project")
-                    .debug_selector(|| "composer-clear-project".to_owned())
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size(px(28.0))
-                    .group("composer-clear-project-icon")
-                    .invisible()
-                    .group_hover(group, |style| style.visible())
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(theme.text_tertiary)
-                    .cursor_pointer()
-                    .hover(move |style| style.bg(hover_fill).text_color(theme.text))
-                    .child(
-                        icon("clear-project", theme.text_tertiary.into())
-                            .size(px(16.0))
-                            .group_hover("composer-clear-project-icon", move |style| {
-                                style.text_color(theme.text)
-                            }),
-                    ),
-            )
-        })
 }
 
 /// Branch control on the home utility bar. The reference renders it only while

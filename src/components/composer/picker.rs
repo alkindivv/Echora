@@ -289,6 +289,15 @@ impl ComposerView {
         self.slider_dragging = false;
         self.model_menu_focused_item = 0;
     }
+    fn finish_model_choice(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_model_list(false);
+        if self.conversation.effort_ids().len() < 2 {
+            self.close_picker(cx);
+            self.model_trigger_focus.focus(window, cx);
+        } else {
+            self.model_menu_focus.focus(window, cx);
+        }
+    }
     pub(super) fn step_slider(&mut self, delta: isize) {
         let count = self.conversation.effort_ids().len();
         if count == 0 {
@@ -353,7 +362,7 @@ impl ComposerView {
                         0 => self.select_default_model(),
                         row => self.select_model_at(row - 1),
                     }
-                    self.show_model_list(false);
+                    self.finish_model_choice(window, cx);
                     self.model_menu_keyboard_focus = true;
                 } else {
                     match self.focused_picker_control() {
@@ -719,6 +728,31 @@ impl ComposerView {
 
         div()
             .id("model-power-slider")
+            .role(gpui::Role::Slider)
+            .aria_label(crate::i18n::format!("推理强度" => "Power"))
+            .aria_value(self.selected_effort_label())
+            .aria_numeric_value(slider_index as f64)
+            .aria_min_numeric_value(0.)
+            .aria_max_numeric_value(effort_count.saturating_sub(1) as f64)
+            .aria_numeric_value_step(1.)
+            .on_a11y_action(gpui::AccessibleAction::Increment, {
+                let view = cx.entity();
+                move |_, _, cx| {
+                    view.update(cx, |this, cx| {
+                        this.step_slider(1);
+                        cx.notify();
+                    })
+                }
+            })
+            .on_a11y_action(gpui::AccessibleAction::Decrement, {
+                let view = cx.entity();
+                move |_, _, cx| {
+                    view.update(cx, |this, cx| {
+                        this.step_slider(-1);
+                        cx.notify();
+                    })
+                }
+            })
             .relative()
             .h(px(32.0))
             .mx(px(2.0))
@@ -983,9 +1017,8 @@ impl ComposerView {
                     } else {
                         this.select_model_at(index - 1);
                     }
-                    this.show_model_list(false);
+                    this.finish_model_choice(window, cx);
                     this.model_menu_keyboard_focus = false;
-                    this.model_menu_focus.focus(window, cx);
                     cx.stop_propagation();
                     cx.notify();
                 }))
@@ -1082,10 +1115,8 @@ impl ComposerView {
         _viewport_width: f32,
         theme: Theme,
         cx: &mut Context<Self>,
-    ) -> gpui::Stateful<Div> {
-        // The popup aligns to the trigger's trailing edge and maintains its
-        // width while changing views. The trigger itself never reserves space.
-        div()
+    ) -> gpui::AnyElement {
+        let menu = div()
             .id("model-picker-menu")
             .debug_selector(|| "MODEL_PICKER_MENU".to_owned())
             .role(gpui::Role::Menu)
@@ -1099,9 +1130,6 @@ impl ComposerView {
                 }),
             )
             .on_key_down(cx.listener(Self::handle_model_menu_key))
-            .absolute()
-            .right(px(super::MODEL_PICKER_RIGHT_INSET))
-            .bottom(px(8.0 + 28.0 + MODEL_PICKER_MENU_GAP))
             .w(px(MODEL_PICKER_WIDTH))
             .rounded(px(20.0))
             .bg(theme.model_picker_surface)
@@ -1129,6 +1157,22 @@ impl ComposerView {
                 self.model_list(theme, cx).into_any_element()
             } else {
                 self.slider_view(theme, cx).into_any_element()
-            })
+            });
+        if let Some(trigger) = self.model_trigger_bounds.get() {
+            gpui::anchored()
+                .anchor(gpui::Anchor::BottomLeft)
+                .position(gpui::point(
+                    trigger.center().x - px(MODEL_PICKER_WIDTH / 2.),
+                    trigger.top() - px(MODEL_PICKER_MENU_GAP),
+                ))
+                .snap_to_window_with_margin(px(8.))
+                .child(menu)
+                .into_any_element()
+        } else {
+            menu.absolute()
+                .right(px(super::MODEL_PICKER_RIGHT_INSET))
+                .bottom(px(8.0 + 28.0 + MODEL_PICKER_MENU_GAP))
+                .into_any_element()
+        }
     }
 }

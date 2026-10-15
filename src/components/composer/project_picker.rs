@@ -30,6 +30,7 @@ pub(super) struct ProjectPicker {
     pub(super) error: Option<String>,
     pub(super) input: Entity<PromptInput>,
     pub(super) trigger_focus: FocusHandle,
+    pub(super) clear_focus: FocusHandle,
     pub(super) trigger_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     active_bounds: Option<Bounds<Pixels>>,
     previous_focus: Option<FocusHandle>,
@@ -65,6 +66,7 @@ impl ProjectPicker {
             error: None,
             input,
             trigger_focus: cx.focus_handle().tab_stop(true),
+            clear_focus: cx.focus_handle().tab_stop(true),
             trigger_bounds: Rc::new(Cell::new(None)),
             active_bounds: None,
             previous_focus: None,
@@ -136,7 +138,7 @@ impl ComposerView {
         cx.notify();
     }
 
-    fn project_choices(&self, cx: &Context<Self>) -> Vec<ProjectChoice> {
+    pub(super) fn project_choices(&self, cx: &Context<Self>) -> Vec<ProjectChoice> {
         let query = self
             .project_picker
             .input
@@ -166,9 +168,7 @@ impl ComposerView {
             })
             .map(|p| ProjectChoice::Project(p.project_id.clone(), p.name.clone()))
             .collect::<Vec<_>>();
-        if query.is_empty() {
-            choices.push(ProjectChoice::Create);
-        }
+        choices.push(ProjectChoice::Create);
         if self.conversation.project_id.is_some() {
             choices.push(ProjectChoice::Clear);
         }
@@ -269,20 +269,9 @@ impl ComposerView {
                     cx.stop_propagation();
                 }
             }))
-            .on_click(cx.listener(|this, e: &gpui::ClickEvent, window, cx| {
+            .on_click(cx.listener(|this, _, window, cx| {
                 cx.stop_propagation();
-                let clear = this.conversation.project_id.is_some()
-                    && this
-                        .project_picker
-                        .trigger_bounds
-                        .get()
-                        .is_some_and(|b| f32::from(e.position().x - b.left()) < 28.0);
-                if clear {
-                    this.project_picker.open = false;
-                    this.focus_prompt_pending = true;
-                    cx.emit(DraftProjectSelected(None));
-                    cx.notify();
-                } else if this.project_picker.open {
+                if this.project_picker.open {
                     this.project_picker.open = false;
                     this.project_picker.trigger_focus.focus(window, cx);
                     cx.notify();
@@ -290,6 +279,51 @@ impl ComposerView {
                     this.open_project_picker(None, window, cx);
                 }
             }))
+            .when(self.workspace.project_label.is_some(), |button| {
+                button.child(
+                    div()
+                        .id("composer-clear-project")
+                        .debug_selector(|| "composer-clear-project".to_owned())
+                        .role(gpui::Role::Button)
+                        .aria_label(
+                            crate::i18n::format!("不在项目中工作" => "Don't work in a project"),
+                        )
+                        .track_focus(&self.project_picker.clear_focus)
+                        .tab_stop(true)
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size(px(28.))
+                        .group("composer-clear-project-icon")
+                        .invisible()
+                        .group_hover("composer-project-hover", |s| s.visible())
+                        .focus_visible(|s| s.visible())
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(theme.text.alpha(0.05)))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.apply_project_choice(ProjectChoice::Clear, cx);
+                        }))
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                cx.stop_propagation();
+                                this.apply_project_choice(ProjectChoice::Clear, cx);
+                            }
+                        }))
+                        .child(
+                            icon("clear-project", theme.text_tertiary.into())
+                                .size(px(16.))
+                                .group_hover("composer-clear-project-icon", move |s| {
+                                    s.text_color(theme.text)
+                                }),
+                        ),
+                )
+            })
             .child(
                 canvas(move |b, _, _| bounds.set(Some(b)), |_, (), _, _| {})
                     .absolute()

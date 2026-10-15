@@ -42,14 +42,6 @@ impl ChatApp {
         self.project_creation.device_menu = false;
         self.project_creation.marker_menu = false;
         self.project_creation.focus_pending = false;
-        cx.notify();
-    }
-
-    pub(super) fn cancel_project_creation(&mut self, cx: &mut Context<Self>) {
-        if self.project_creation.creating {
-            return;
-        }
-        self.close_project_creation(cx);
         self.project_creation.roots.clear();
         self.project_creation.marker = None;
         self.project_creation
@@ -63,6 +55,11 @@ impl ChatApp {
             .update(cx, |input, cx| input.set_text_silently("", cx));
         self.project_creation.error = None;
         self.project_creation.cycle = self.project_creation.cycle.wrapping_add(1);
+        cx.notify();
+    }
+
+    pub(super) fn cancel_project_creation(&mut self, cx: &mut Context<Self>) {
+        self.close_project_creation(cx);
     }
 
     pub(super) fn add_project_sources(&mut self, cx: &mut Context<Self>) {
@@ -217,6 +214,7 @@ impl ChatApp {
                 self.project_creation.focus_pending = true;
             } else if self.project_creation.device_menu {
                 self.project_creation.device_menu = false;
+                self.project_creation.device_focus.focus(window, cx);
             } else {
                 self.close_project_creation(cx);
             }
@@ -227,6 +225,17 @@ impl ChatApp {
                 window.focus_prev(cx);
             } else {
                 window.focus_next(cx);
+            }
+            if !self.project_creation.focus.contains_focused(window, cx) {
+                if event.keystroke.modifiers.shift {
+                    self.project_creation.close_focus.focus(window, cx);
+                } else {
+                    self.project_creation
+                        .name
+                        .read(cx)
+                        .focus_handle(cx)
+                        .focus(window, cx);
+                }
             }
             cx.stop_propagation();
         }
@@ -256,6 +265,7 @@ impl ChatApp {
     pub(super) fn project_creation_overlay(
         &self,
         theme: Theme,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<Div> {
         let creating = self.project_creation.creating;
@@ -273,15 +283,15 @@ impl ChatApp {
         if self.project_creation.roots.is_empty() {
             sources = sources.child(div().h(px(102.5625)).p(px(24.)).flex().flex_col().items_center().gap(px(12.))
                 .child(div().id("project-creation-device").role(gpui::Role::Button).aria_label(crate::i18n::format!("项目所在设备" => "Project device"))
-                    .focusable().tab_stop(true).h(px(18.5625)).flex().items_center().gap(px(4.)).text_size(px(13.)).line_height(px(18.5714)).text_color(theme.text.alpha(0.65)).cursor_pointer()
+                    .track_focus(&self.project_creation.device_focus).tab_stop(true).h(px(18.5625)).flex().items_center().gap(px(4.)).text_size(px(13.)).line_height(px(18.5714)).text_color(theme.text.alpha(0.65)).cursor_pointer()
                     .on_click(cx.listener(|this,_,_,cx|{ if !this.project_creation.creating {this.project_creation.device_menu = !this.project_creation.device_menu;} cx.notify(); }))
                     .on_key_down(cx.listener(|this,e: &KeyDownEvent,_,cx|{ if matches!(e.keystroke.key.as_str(),"enter"|"space"|"down") { this.project_creation.device_menu=true; cx.stop_propagation(); cx.notify(); }}))
-                    .child(crate::i18n::format!("在此电脑上添加文件夹" => "Add folders on this computer")).child(icon("chevron-down",theme.text.into()).size(px(16.))))
+                    .child(crate::i18n::format!("在此电脑上添加文件夹" => "Add a folder on this computer")).child(icon("chevron-down",theme.text.into()).size(px(16.))))
                 .child(div().id("project-creation-add-source").role(gpui::Role::Button).aria_label(crate::i18n::text("添加")).focusable().tab_stop(true)
                     .h(px(24.)).px(px(8.)).rounded_full().bg(theme.text.alpha(0.05)).flex().items_center().gap(px(4.)).text_size(px(13.)).line_height(px(18.)).cursor_pointer()
                     .hover(move |s|s.bg(theme.text.alpha(0.10))).on_click(cx.listener(Self::add_project_sources_click))
                     .on_key_down(cx.listener(|this,e: &KeyDownEvent,_,cx|{if matches!(e.keystroke.key.as_str(),"enter"|"space"){this.add_project_sources(cx);cx.stop_propagation();}}))
-                    .child(icon("command-open-folder",theme.text.into()).size(px(16.))).child(crate::i18n::text("添加"))));
+                    .child(icon("project-add-folder",theme.text.into()).size(px(16.))).child(crate::i18n::text("添加"))));
         } else {
             for (index, path) in self.project_creation.roots.iter().enumerate() {
                 let path = path.display().to_string();
@@ -370,6 +380,14 @@ impl ChatApp {
             .border_1()
             .border_color(if self.project_creation.error.is_some() {
                 theme.warning
+            } else if self
+                .project_creation
+                .name
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+            {
+                theme.accent
             } else {
                 theme.border
             })
@@ -545,7 +563,7 @@ impl ChatApp {
                     .id("project-creation-close")
                     .role(gpui::Role::Button)
                     .aria_label(crate::i18n::text("关闭对话框"))
-                    .focusable()
+                    .track_focus(&self.project_creation.close_focus)
                     .tab_stop(true)
                     .absolute()
                     .top(px(16.))
@@ -585,12 +603,13 @@ impl ChatApp {
             .key_context("ProjectCreation")
             .capture_key_down(cx.listener(Self::handle_project_creation_key))
             .on_action(
-                cx.listener(|this, _: &super::DismissProjectCreation, _, cx| {
+                cx.listener(|this, _: &super::DismissProjectCreation, window, cx| {
                     if this.project_creation.marker_menu {
                         this.project_creation.marker_menu = false;
                         this.project_creation.focus_pending = true;
                     } else if this.project_creation.device_menu {
                         this.project_creation.device_menu = false;
+                        this.project_creation.device_focus.focus(window, cx);
                     } else {
                         this.close_project_creation(cx);
                     }
@@ -615,9 +634,9 @@ impl ChatApp {
         div()
             .id("project-device-menu")
             .absolute()
-            .top(px(190.))
+            .top(px(184.5))
             .left(px(160.))
-            .w(px(220.))
+            .w(px(200.))
             .p(px(4.))
             .rounded(px(20.))
             .bg(theme.model_picker_surface)
@@ -625,7 +644,9 @@ impl ChatApp {
             .on_click(|_, _, cx| cx.stop_propagation())
             .shadow(vec![
                 gpui::BoxShadow::new(px(0.), px(8.), gpui::hsla(0., 0., 0., 0.12))
-                    .blur_radius(px(16.)),
+                    .blur_radius(px(16.))
+                    .spread_radius(px(-4.)),
+                gpui::BoxShadow::new(px(0.), px(0.), theme.border.into()).spread_radius(px(0.5)),
             ])
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.project_creation.device_menu = false;
@@ -645,7 +666,10 @@ impl ChatApp {
                             cx.notify();
                         }
                     }))
-                    .h(px(29.))
+                    .h(px(28.5625))
+                    .rounded(px(15.))
+                    .text_size(px(13.))
+                    .line_height(px(18.5714))
                     .px(px(8.))
                     .flex()
                     .items_center()
@@ -664,20 +688,6 @@ impl ChatApp {
                     )
                     .child(icon("check", theme.text.into()).size(px(16.))),
             )
-            .child(
-                div()
-                    .px(px(8.))
-                    .py(px(5.))
-                    .text_color(theme.text_tertiary)
-                    .child(crate::i18n::format!("远程设备" => "Remote devices")),
-            )
-            .child(
-                div().px(px(8.)).py(px(5.)).opacity(0.5).child(
-                    crate::i18n::format!("未连接任何远程主机" => "No remote hosts connected"),
-                ),
-            )
-            .child(div().px(px(8.)).py(px(5.)).text_size(px(12.)).text_color(theme.text_tertiary)
-                .child(crate::i18n::format!("Echora 尚不支持添加远程主机" => "Remote host setup is unavailable in Echora")))
     }
 }
 

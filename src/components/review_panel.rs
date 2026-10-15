@@ -395,6 +395,41 @@ impl ReviewPanel {
         panel
     }
 
+    pub fn set_workspace_root(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
+        if self.cwd == cwd {
+            return;
+        }
+        self.cwd = cwd;
+        self.generation += 1;
+        self.loading = false;
+        self.snapshot = Arc::new(Snapshot::default());
+        self.snapshot_loaded = false;
+        self.scope = Scope::Uncommitted;
+        self.last_turn.clear();
+        self.latest_turn.clear();
+        self.history_pinned = false;
+        self.error = None;
+        self.operation_error = None;
+        self.menu = None;
+        self.confirm = None;
+        self.expanded_files.clear();
+        self.collapsed.clear();
+        self.folded_deletions.clear();
+        self.viewed.clear();
+        self.folder_collapsed.clear();
+        self.previews.clear();
+        self.selection = None;
+        self.draft = None;
+        self.selecting = false;
+        self.gutter_drag = None;
+        self.clear_comments(cx);
+        self.refresh(cx);
+        cx.notify();
+    }
+    #[cfg(test)]
+    pub(crate) fn workspace_root(&self) -> &std::path::Path {
+        &self.cwd
+    }
     pub fn set_mode(&mut self, mode: ThemeMode, cx: &mut Context<Self>) {
         self.mode = mode;
         self.branch_picker
