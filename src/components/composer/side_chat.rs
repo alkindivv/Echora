@@ -93,7 +93,7 @@ impl ComposerView {
 
     pub(crate) fn is_running(&self) -> bool {
         matches!(
-            self.conversation.phase,
+            self.conversation_phase(),
             ConversationPhase::Starting
                 | ConversationPhase::Thinking
                 | ConversationPhase::Streaming

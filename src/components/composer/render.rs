@@ -1,8 +1,9 @@
 //! Render behavior and presentation for the prompt composer.
 
 use gpui::{
-    Bounds, BoxShadow, ContentMask, Context, Div, Hsla, MouseButton, Pixels, Render, SharedString,
-    TextAlign, TextRun, Window, canvas, deferred, div, hsla, point, prelude::*, px, rgba, size,
+    Animation, AnimationExt, Bounds, BoxShadow, ContentMask, Context, Div, Hsla, MouseButton,
+    Pixels, Render, SharedString, TextAlign, TextRun, Window, canvas, deferred, div, hsla, point,
+    prelude::*, px, rgba, size,
 };
 
 use super::{COMPOSER_CORNER_RADIUS, ComposerView, DictationState, MODEL_PICKER_TRIGGER_GAP};
@@ -78,19 +79,9 @@ impl ComposerView {
                     .child(icon("model-fast", theme.text.into()).size(px(14.0)))
             })
             .child(trigger_label);
-        let prompt_is_empty = self.prompt_text(cx).trim().is_empty()
-            && self.review_comments.is_empty()
-            && self.prompt_context.files.is_empty();
         let conversation_started = self.conversation.phase != ConversationPhase::Empty
             || !self.conversation.activities.is_empty();
-        let generation_active = matches!(
-            self.conversation.phase,
-            ConversationPhase::Starting
-                | ConversationPhase::Thinking
-                | ConversationPhase::Streaming
-                | ConversationPhase::Stopping
-        );
-        let show_stop = generation_active && prompt_is_empty;
+        let send_action = self.send_action(cx);
         div()
             .w_full()
             .relative()
@@ -436,13 +427,15 @@ impl ComposerView {
                                                     div()
                                                         .id("composer-voice")
                                                         .role(gpui::Role::Button)
-                                                        .aria_label(if show_stop { crate::i18n::text("停止生成") } else if generation_active { crate::i18n::text("追加输入") } else { crate::i18n::text("发送") })
+                                                        .accessibility_id("composer-send")
+                                                        .debug_selector(|| "composer-send".to_owned())
+                                                        .aria_label(send_action.label())
+                                                        .when(send_action.busy(), |button| button.aria_description(crate::i18n::text("正在处理")))
                                                         .focusable()
-                                                        .tab_stop(true)
+                                                        .tab_stop(send_action.enabled())
                                                         .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                                                             if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                                                if this.is_running() && this.prompt_text(cx).trim().is_empty() && this.prompt_context.files.is_empty() && this.review_comments.is_empty() { this.stop_generation(cx); }
-                                                                else { this.submit_current_prompt(cx); }
+                                                                this.activate_send_action(cx);
                                                                 cx.stop_propagation();
                                                             }
                                                         }))
@@ -453,56 +446,35 @@ impl ComposerView {
                                                         .flex()
                                                         .items_center()
                                                         .justify_center()
-                                                        .when(
-                                                            prompt_is_empty
-                                                                && conversation_started
-                                                                && !show_stop,
-                                                            |button| button.opacity(0.4),
-                                                        )
-                                                        .when(
-                                                            !prompt_is_empty
-                                                                || show_stop
-                                                                || !conversation_started,
-                                                            |button| button.cursor_pointer(),
-                                                        )
-                                                        .when(!show_stop, |button| {
+                                                        .opacity(self.send_opacity.value(cx.background_executor().now()))
+                                                        .focus_visible(|style| style.shadow(vec![BoxShadow::new(px(0.0), px(0.0), theme.button.into()).spread_radius(px(2.0))]))
+                                                        .when(send_action.enabled(), |button| {
                                                             button.on_click(cx.listener(
                                                                 |this, _, _, cx| {
-                                                                    this.submit_current_prompt(cx);
+                                                                    this.activate_send_action(cx);
                                                                 },
                                                             ))
                                                         })
-                                                        .when(show_stop, |button| {
-                                                            button.on_click(cx.listener(
-                                                                |this, _, _, cx| {
-                                                                    this.stop_generation(cx)
-                                                                },
-                                                            ))
-                                                        })
-                                                        .child(
+                                                        .when(!send_action.busy(), |button| button.child(
                                                             icon(
-                                                                if show_stop {
+                                                                if send_action == super::send::SendAction::Resume {
+                                                                    "composer-resume"
+                                                                } else if send_action == super::send::SendAction::Stop {
                                                                     "composer-stop"
-                                                                } else if !prompt_is_empty
-                                                                    || conversation_started
-                                                                {
-                                                                    "dictation-send"
                                                                 } else {
-                                                                    "voice"
+                                                                    "dictation-send"
                                                                 },
                                                                 theme.button_text.into(),
                                                             )
-                                                            .size(px(
-                                                                if show_stop
-                                                                    || !prompt_is_empty
-                                                                    || conversation_started
-                                                                {
-                                                                    20.0
-                                                                } else {
-                                                                    16.0
-                                                                },
-                                                            )),
-                                                        ),
+                                                            .size(px(20.0)),
+                                                        ))
+                                                        .when(send_action.busy(), |button| button.child(
+                                                            icon("dictation-spinner", theme.button_text.into())
+                                                                .size(px(20.0))
+                                                                .with_animation("composer-send-busy", Animation::new(std::time::Duration::from_millis(1000)).repeat(), |spinner, progress| {
+                                                                    spinner.with_transformation(gpui::Transformation::rotate(gpui::radians(progress * std::f32::consts::TAU)))
+                                                                })
+                                                        )),
                                                 ),
                                         ),
                                 ),
@@ -828,6 +800,13 @@ pub(super) fn context_toolbar(
 
 impl Render for ComposerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let action = self.send_action(cx);
+        if self
+            .send_opacity
+            .update(action, cx.background_executor().now(), cx.reduce_motion())
+        {
+            cx.on_next_frame(window, |_, _, cx| cx.notify());
+        }
         if self.menu_open && self.model_ultra_warning_visible() {
             window.request_animation_frame();
         }

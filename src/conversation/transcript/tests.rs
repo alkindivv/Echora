@@ -557,3 +557,50 @@ fn interleaved_text_deltas_and_completion_snapshots_keep_their_message_identity(
         ]
     );
 }
+
+#[test]
+fn live_work_duration_stays_frozen_without_changing_historical_timing() {
+    use crate::agent::{AgentEvent as E, AgentTurnIdentity};
+    use std::time::{Duration, Instant};
+    let mut state = ConversationState {
+        thread_id: Some("thread".into()),
+        ..Default::default()
+    };
+    state.begin_prompt("prompt");
+    state.apply_agent_event_batch(vec![
+        E::TurnReady(AgentTurnIdentity {
+            generation: 1,
+            thread_id: "thread".into(),
+            turn_id: "turn".into(),
+        }),
+        E::AssistantMessageStarted {
+            item_id: "answer".into(),
+            phase: Some("final_answer".into()),
+        },
+        E::TextDelta {
+            item_id: "answer".into(),
+            delta: "reply".into(),
+        },
+    ]);
+    let started = Instant::now() - Duration::from_secs(10);
+    state.live_timing.start(started);
+    state
+        .live_timing
+        .message_started("answer", started + Duration::from_secs(3));
+    assert_eq!(state.turn_presentation().unwrap().duration_ms, Some(3000));
+    state.apply_agent_event_batch(vec![
+        E::TurnTimingUpdated {
+            started_at: None,
+            completed_at: None,
+            duration_ms: Some(10000),
+        },
+        E::Completed,
+    ]);
+    assert_eq!(state.turn_presentation().unwrap().duration_ms, Some(3000));
+    assert_eq!(state.resumed_turn().unwrap().duration_ms, Some(10000));
+    state.begin_prompt("next");
+    assert_eq!(
+        state.transcript[0].resumed.as_ref().unwrap().duration_ms,
+        Some(10000)
+    );
+}

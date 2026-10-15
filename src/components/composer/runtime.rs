@@ -125,7 +125,13 @@ impl ComposerView {
             self.submit_goal(raw_prompt.trim().to_owned(), cx);
             return;
         }
-        if raw_prompt.trim().is_empty()
+        let resume = self.conversation.phase == crate::conversation::ConversationPhase::Stopped
+            && self.conversation.thread_id.is_some()
+            && raw_prompt.trim().is_empty()
+            && self.review_comments.is_empty()
+            && self.prompt_context.files.is_empty();
+        if !resume
+            && raw_prompt.trim().is_empty()
             && self.review_comments.is_empty()
             && self.prompt_context.files.is_empty()
         {
@@ -201,7 +207,9 @@ impl ComposerView {
             context: self.prompt_context.clone(),
             comments: self.review_comments.clone(),
         };
-        let prompt = if raw_prompt.trim().is_empty() && !self.prompt_context.files.is_empty() {
+        let prompt = if resume {
+            String::new()
+        } else if raw_prompt.trim().is_empty() && !self.prompt_context.files.is_empty() {
             crate::i18n::text("请查看附加文件。").to_owned()
         } else {
             raw_prompt
@@ -245,6 +253,9 @@ impl ComposerView {
         }
         if !running {
             self.conversation.begin_prompt(&prompt);
+            if resume {
+                self.conversation.user_message_time = None;
+            }
             self.conversation.user_images = draft
                 .context
                 .files

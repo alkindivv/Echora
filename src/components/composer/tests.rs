@@ -1942,7 +1942,7 @@ fn a_closed_stream_without_a_terminal_event_becomes_failed() {
     let (phase, _, _, message, completed_at) =
         app.read_entity(&composer, |composer, _| composer.conversation_snapshot());
     assert_eq!(phase, ConversationPhase::Failed);
-    assert_eq!(message, crate::conversation::STREAM_DISCONNECTED_MESSAGE);
+    assert_eq!(message, "partial");
     assert!(completed_at.is_some());
     assert_eq!(
         app.read_entity(&composer, |composer, _| composer
@@ -3789,6 +3789,133 @@ fn steer_composer_starting_and_stopping_preserve_unsent_text_and_attachments() {
     });
     assert!(backend.steers.lock().unwrap().is_empty());
     assert_eq!(backend.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn send_control_states_and_resume_use_the_same_activation_decision() {
+    use super::send::SendAction;
+    let mut app = TestApp::new();
+    let backend = RecordingBackend::new();
+    let source: Arc<dyn AgentBackend> = backend.clone();
+    let composer = app.new_entity(|cx| ComposerView::new_with_backend(ThemeMode::Dark, source, cx));
+    let interrupt = Arc::new(TestInterruptControl::working());
+    app.update_entity(&composer, |c, cx| {
+        c.apply_model_catalog(test_model_catalog());
+        c.conversation.thread_id = Some("thread".into());
+        assert_eq!(c.send_action(cx), SendAction::Disabled);
+        c.activate_send_action(cx);
+        c.prompt_editor
+            .update(cx, |i, cx| i.set_text_silently("initial", cx));
+        assert_eq!(c.send_action(cx), SendAction::Send);
+        c.activate_send_action(cx);
+        assert_eq!(c.send_action(cx), SendAction::Starting);
+        c.activate_send_action(cx);
+        c.apply_agent_event_batch(vec![AgentEvent::TurnReady(
+            crate::agent::AgentTurnIdentity {
+                generation: 1,
+                thread_id: "thread".into(),
+                turn_id: "turn".into(),
+            },
+        )]);
+        c.conversation.active_turn = Some(AgentInterruptHandle::new(interrupt.clone()));
+        assert_eq!(c.send_action(cx), SendAction::Stop);
+        c.prompt_editor
+            .update(cx, |i, cx| i.set_text_silently("follow-up", cx));
+        assert_eq!(c.send_action(cx), SendAction::Send);
+        c.clear_prompt(cx);
+        c.activate_send_action(cx);
+        assert_eq!(c.send_action(cx), SendAction::Stopping);
+        c.activate_send_action(cx);
+        assert_eq!(interrupt.writes.load(Ordering::Relaxed), 1);
+        c.apply_agent_event_batch(vec![AgentEvent::Interrupted]);
+        assert_eq!(c.send_action(cx), SendAction::Resume);
+        c.prompt_editor
+            .update(cx, |i, cx| i.set_text_silently("  ", cx));
+        c.activate_send_action(cx);
+        assert_eq!(c.send_action(cx), SendAction::Starting);
+        assert_eq!(c.conversation.user_message.as_deref(), Some(""));
+        assert!(c.conversation.user_message_time.is_none());
+        c.apply_agent_event_batch(vec![AgentEvent::TurnReady(
+            crate::agent::AgentTurnIdentity {
+                generation: 1,
+                thread_id: "thread".into(),
+                turn_id: "resumed".into(),
+            },
+        )]);
+        assert_eq!(c.send_action(cx), SendAction::Stop);
+        assert!(
+            c.conversation
+                .submissions
+                .iter()
+                .all(|s| s.status == crate::conversation::SubmissionStatus::Accepted)
+        );
+        c.conversation.phase = ConversationPhase::Complete;
+        c.side_ready = false;
+        c.prompt_editor
+            .update(cx, |i, cx| i.set_text_silently("offline draft", cx));
+        assert_eq!(c.send_action(cx), SendAction::Disabled);
+        c.activate_send_action(cx);
+        assert_eq!(c.prompt_text(cx), "offline draft");
+    });
+    let requests = backend.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].prompt, "initial");
+    assert_eq!(requests[1].prompt, "");
+    assert_eq!(requests[1].thread_id.as_deref(), Some("thread"));
+}
+
+#[gpui::test]
+fn send_button_hit_region_and_busy_reactivation_match_the_visible_control(
+    cx: &mut gpui::TestAppContext,
+) {
+    let backend = RecordingBackend::new();
+    let source: Arc<dyn AgentBackend> = backend.clone();
+    let window = cx.add_window(|_, cx| ComposerView::new_with_backend(ThemeMode::Dark, source, cx));
+    let composer = cx.update(|cx| window.root(cx).unwrap());
+    composer.update(cx, |c, _| {
+        c.apply_model_catalog(test_model_catalog());
+        c.conversation.thread_id = Some("thread".into());
+        c.conversation.phase = ConversationPhase::Complete;
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    let bounds = visual.debug_bounds("composer-send").unwrap();
+    assert_eq!(bounds.size, size(px(28.0), px(28.0)));
+    visual.simulate_click(bounds.center(), Default::default());
+    assert!(backend.requests.lock().unwrap().is_empty());
+    for offset in [
+        point(px(-12.0), px(0.0)),
+        point(px(12.0), px(0.0)),
+        point(px(0.0), px(-12.0)),
+        point(px(0.0), px(12.0)),
+    ] {
+        composer.update(&mut visual, |c, cx| {
+            c.conversation.phase = ConversationPhase::Complete;
+            c.prompt_editor
+                .update(cx, |i, cx| i.set_text_silently("new turn", cx));
+            cx.notify();
+        });
+        visual.update(|window, cx| window.draw(cx).clear(cx));
+        assert_eq!(visual.debug_bounds("composer-send").unwrap(), bounds);
+        let count = backend.requests.lock().unwrap().len();
+        visual.simulate_mouse_move(bounds.center() + offset, None, Default::default());
+        visual.simulate_click(bounds.center() + offset, Default::default());
+        assert_eq!(backend.requests.lock().unwrap().len(), count + 1);
+        visual.update(|window, cx| window.draw(cx).clear(cx));
+        visual.simulate_click(bounds.center(), Default::default());
+        assert_eq!(backend.requests.lock().unwrap().len(), count + 1);
+        composer.update(&mut visual, |c, cx| {
+            c.apply_agent_event_batch(vec![
+                AgentEvent::TurnReady(crate::agent::AgentTurnIdentity {
+                    generation: 1,
+                    thread_id: "thread".into(),
+                    turn_id: format!("turn-{count}"),
+                }),
+                AgentEvent::Completed,
+            ]);
+            cx.notify();
+        });
+    }
 }
 
 #[test]

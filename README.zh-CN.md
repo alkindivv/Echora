@@ -129,6 +129,7 @@ Cargo 包和可执行文件目前仍名为 `gpui-chat-clone`，现有构建与�
 - **斜杠菜单：** 在行首或空格后输入 `/` 会在输入框上方打开菜单，提供「代码审查」（Git 项目且输入框没有其他内容时）、「目标」「压缩」「计划模式」（服务端提供时）、「批准」（存在可批准的自动复核拒绝时）和「记忆」（记忆功能开启时）；输入的查询按模糊匹配排序，标题中匹配的部分保持高亮，ChatGPT 的其他命令尚未实现。
 - **协作模式：** 计划与默认模式来自连接的 `collaborationMode/list` 预设，每个连接读取一次；服务端列出计划模式时才提供该选项，模型与推理强度始终使用你的选择。
 - **实时输出与历史：** 实时与恢复后的已完成轮次共用最终答复选择、工作过程折叠、答复操作与文件汇总。文本增量保留 item 身份，完成消息快照校正显示内容；相邻增量以 8 ms 窗口批处理，代码高亮复用已完成行，仅重解析未结束行。已完成轮次折叠最终答复之前的过程消息，追加的用户消息保留原有位置与附件。用户消息只显示最后一个 `## My request:`（或 `## My request for Codex:`）标题行之后的内容，与 ChatGPT 应用一致，因此其前的附件列表和内置浏览器的环境界面状态不会显示，实时与恢复的消息都是如此。文件变更按路径汇总并保留原始 patch。历史由 app-server 提供，不伪造缺失的时间、计划步骤快照或自动复核历史。
+- **实时控制与工作过程：** 28 px 发送按钮在空输入或不可用时显示半透明箭头，启动或停止中显示转圈，生成中无草稿时显示停止、有草稿时显示发送。已中断的聊天提供继续，通过 `turn/start` 的空输入数组恢复任务；暂停的队列通过队列操作继续。最终回答开始出现时收起工作过程，并将工作用时固定在该时刻。活动思考摘要与命令摘要按参考节奏显示扫光。停止后展开工作过程，停止或失败的回复保留已收到的文本。开启减少动态效果后仍修复未完成的 Markdown。
 - **审批：** 并发请求依次显示，提交后等待服务端释放。响应失败可见且不可重复提交。可查看原始请求补丁，展开和复制长命令。使用 Tab / 方向键导航、Enter 激活、Esc 关闭或拒绝；文件审批的 `Shift+Esc` 拒绝并停止轮次。
 - **权限：** 读取服务端 profile 全部页面，以判定实际配置与禁用原因。输入框菜单只提供「请求批准」「帮我批准」「完全访问权限」及其描述；入口标签和选中行统一使用这三种模式。未配置权限默认值的新会话显示「请求批准」；已配置默认值与恢复线程的有效权限决定显示模式。命名 profile 和 granular 策略继续生效，不再把 Custom 或 profile ID 显示为额外模式。已有线程等待 RPC 成功与匹配的设置通知后才显示生效，更新影响后续轮次；复核者变化还会经 `turn/settings/update` 同步到进行中的轮次。完整访问权限需要应用内确认，侧边聊天独立管理权限。线程被另一个 app-server 占用时，警告卡片固定在输入框上方，不随会话滚动。
 - **模型选择器：** 滑块视图与模型列表共用一个弹层。选择模型时保留仍受支持的推理强度与速度；「默认」恢复模型目录的默认设置。配置或恢复的推理强度超出目录内模型的支持范围时，回退到模型默认值。配置或恢复的目录外模型保持选中，显示为「自定义」并提供六档后备推理强度；无法调整推理强度的模型直接打开模型列表，选择后关闭。滑块支持指针拖动、方向键和辅助功能的递增、递减操作。
@@ -245,6 +246,10 @@ Computer Use 先枚举应用，连接打包脚本打印的那个名字，读取�
 Computer Use 只能驱动 macOS 视作用户应用的 bundle，而且驱动过程不能触发隐私弹窗。`scripts/launch_verify_instance.sh` 会打包、把 bundle 复制到 `~/Applications`，再用 `launchctl submit` 加上本会话的 `PATH` 与真实 `HOME` 启动：GUI 进程因此不会打开本仓库所在外置卷上的任何文件，启动也不经过 LaunchServices，它的 `codex app-server --stdio` 子进程读到的正是 ChatGPT 应用同一份 `~/.codex` 项目、会话与登录态。脚本转发 `GPUI_UI_PREFERENCES_PATH`、`GPUI_ASSETS_DIR`、`GPUI_CAPTURE_OUTPUT` 与 `CODEX_HOME`；验证任何会写入 Codex 配置或删除数据的操作（钩子信任、实验性功能、记忆开关、删除记忆）前，先把 `CODEX_HOME` 指向 `~/.codex` 的副本（例如 `cp -Rc ~/.codex/. "$HOME/Library/Application Support/echora-verify/codex-home/"`）。它的 `--stop` 只停止从本工作树副本运行的实例。打成 agent 应用（`GPUI_CAPTURE_AGENT_APP=1`）虽然不显示 Dock 图标，却也会让 Computer Use 的应用清单看不到它。对外置卷上的 bundle 使用 `open -n` 会弹出「想要访问可移除宗卷上的文件」，`launchctl submit` 与会话内的子进程都不会，因此采集脚本与 ChatGPT 参考启动器都不使用 `open -n`。
 
 真实实时轮次采集：启动时传入 `--capture-live-turn="$PWD/artifacts/live.png"`，再在验收实例输入提示词。完成后保存尚未重新加载历史的实时画面，以及包含线程身份、活动数据的 `.json` 侧文件，然后退出。中断、失败或超过五分钟返回失败。
+
+确定性的本地流式校验：`python3 scripts/live_conversation_fixture.py --init-home /path/to/isolated-codex-home` 配置本地 Responses 提供方；运行 `python3 scripts/live_conversation_fixture.py` 监听 9474 端口，把验收实例的 `CODEX_HOME` 指向该隔离目录，再发送 `TOOLS_STREAM`、`STREAM` 或 `FAIL_STREAM`。`CHATGPT_CDP_HTTP=http://127.0.0.1:9473 node scripts/cdp_capture_live_conversation.mjs --output=artifacts/live-reference --theme=dark` 记录专用参考实例的输入框与真实轮次，包括悬停和按下状态；`--draft-at=2400 --interrupt=9000` 还会检查草稿与中断。
+
+原生输入与截图采集：启动专用实例时将 `GPUI_CAPTURE_OUTPUT` 指向内置磁盘路径，然后运行 `swift scripts/capture_live_conversation_native.swift --app='EXACT VERIFICATION APP NAME' --capture='/same/internal/path.png' --output=artifacts/live-native`。脚本通过辅助功能与原生输入采集实时轮次和按钮状态。`--prompt=PLAIN_STREAM` 检查纯文本，`--prompt=FAIL_AFTER_STREAM` 检查部分输出后的失败，`--interrupt=8 --resume` 检查停止与继续。原生脚本的时间选项以秒为单位；`--duration=25` 控制采集时长，`--draft-at=0` 跳过插入草稿。
 
 自动恢复会话截图可追加 `--resume-thread=THREAD_ID --screenshot="$PWD/artifacts/resumed-thread.png"`。ID 接受原始 UUID 或 `local:<uuid>`。可选 `--resume-scroll-from-bottom=3200` 指定距底部的滚动距离，省略则停在底部。应用等待历史、侧栏、模型目录与三个稳定绘制帧后截图退出，失败或超时返回非零状态。请选择未被其他活动写入进程占用的线程。
 

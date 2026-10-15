@@ -26,6 +26,7 @@ mod render;
 mod requests;
 mod review;
 mod runtime;
+mod send;
 mod shell;
 mod side_chat;
 mod slash_menu;
@@ -145,6 +146,7 @@ pub struct ComposerView {
     prompt_editor: Entity<crate::components::file_editor::FileEditor>,
     side_chat: bool,
     side_ready: bool,
+    send_opacity: send::SendOpacity,
     available_width: Option<f32>,
     trailing_margin: Option<f32>,
     prompt_context: crate::agent::AgentPromptContext,
@@ -397,6 +399,7 @@ impl ComposerView {
             prompt_editor,
             side_chat: false,
             side_ready: true,
+            send_opacity: Default::default(),
             available_width: None,
             trailing_margin: None,
             prompt_context: Default::default(),
@@ -687,7 +690,7 @@ impl ComposerView {
     }
 
     pub fn resumed_turn(&self) -> Option<ResumedTurnPresentation> {
-        self.conversation.resumed_turn()
+        self.conversation.turn_presentation()
     }
 
     pub fn conversation_render_snapshot(

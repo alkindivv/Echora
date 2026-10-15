@@ -143,17 +143,13 @@ fn incomplete_failed_and_unidentified_history_stays_visible() {
         duration_ms: None,
         final_message_ids: vec!["answer".into()],
     };
-    for phase in [
-        ConversationPhase::Streaming,
-        ConversationPhase::Stopped,
-        ConversationPhase::Failed,
-    ] {
+    {
         let mut rows = Vec::new();
         append_turn_activity_rows(
             &mut rows,
             &activities,
             false,
-            phase,
+            ConversationPhase::Failed,
             Some(&resumed),
             &HashSet::new(),
         );
@@ -175,6 +171,81 @@ fn incomplete_failed_and_unidentified_history_stays_visible() {
     assert_eq!(rows.len(), 2);
     assert_eq!(resumed_work_label(None), "工作过程");
     assert_eq!(resumed_work_label(Some(3_849_000)), "用时 1小时 4分钟 9秒");
+}
+
+#[test]
+fn live_work_collapses_on_nonempty_final_text_and_keeps_the_same_rows_on_completion() {
+    let turn = ResumedTurnPresentation {
+        id: "live".into(),
+        duration_ms: Some(2300),
+        final_message_ids: vec!["answer".into()],
+    };
+    let mut activities = vec![
+        message("commentary"),
+        ConversationActivity::AssistantMessage {
+            item_id: "answer".into(),
+            text: " \n".into(),
+        },
+    ];
+    let mut rows = Vec::new();
+    append_turn_activity_rows(
+        &mut rows,
+        &activities,
+        true,
+        ConversationPhase::Streaming,
+        Some(&turn),
+        &HashSet::new(),
+    );
+    assert!(matches!(rows[0], ConversationListRow::Working { .. }));
+    assert_eq!(rows.len(), 3);
+    activities[1] = message("answer");
+    for phase in [
+        ConversationPhase::Streaming,
+        ConversationPhase::Complete,
+        ConversationPhase::Stopped,
+    ] {
+        rows.clear();
+        append_turn_activity_rows(
+            &mut rows,
+            &activities,
+            false,
+            phase,
+            Some(&turn),
+            &HashSet::new(),
+        );
+        assert!(matches!(
+            rows[0],
+            ConversationListRow::ResumedWork {
+                expanded,
+                ..
+            } if expanded == (phase == ConversationPhase::Stopped)
+        ));
+        assert_eq!(
+            rows.len(),
+            if phase == ConversationPhase::Stopped {
+                3
+            } else {
+                2
+            }
+        );
+        let mut expanded = Vec::new();
+        append_turn_activity_rows(
+            &mut expanded,
+            &activities,
+            false,
+            phase,
+            Some(&turn),
+            &HashSet::from(["live".into()]),
+        );
+        assert_eq!(
+            expanded.len(),
+            if phase == ConversationPhase::Stopped {
+                2
+            } else {
+                3
+            }
+        );
+    }
 }
 
 #[test]

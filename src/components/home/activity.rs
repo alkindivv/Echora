@@ -117,6 +117,29 @@ pub(super) fn render_activity_stream_unit(
                 }
             }
             ConversationActivity::Reasoning(reasoning) => {
+                if reasoning.is_active() {
+                    let label = reasoning
+                        .summary
+                        .iter()
+                        .rev()
+                        .flat_map(|part| part.lines().rev())
+                        .find(|line| !line.trim().is_empty())
+                        .map(|line| {
+                            line.trim()
+                                .strip_prefix("**")
+                                .and_then(|line| line.strip_suffix("**"))
+                                .unwrap_or(line.trim())
+                                .to_owned()
+                        })
+                        .unwrap_or_else(|| crate::i18n::text("正在思考").to_owned());
+                    return super::animation::shimmer_label(
+                        label,
+                        super::CONVERSATION_CONTENT_MAX_WIDTH,
+                        theme,
+                        thinking_shimmer_progress,
+                    )
+                    .into_any_element();
+                }
                 let expanded =
                     reasoning.is_active() || expanded_reasoning.contains(&reasoning.item_id);
                 let disclosure_progress = reasoning_disclosure_progress
@@ -329,6 +352,7 @@ pub(super) fn render_activity_stream_unit(
                     summary: message,
                     details,
                     accessible_kind: crate::i18n::text("Codex 错误"),
+                    terminal_error: true,
                     outer_gap: NOTICE_ERROR_GAP,
                     content_gap: NOTICE_ERROR_CONTENT_GAP,
                 },
@@ -341,6 +365,7 @@ pub(super) fn render_activity_stream_unit(
                     summary: message,
                     details: None,
                     accessible_kind: crate::i18n::text("Codex 警告"),
+                    terminal_error: false,
                     outer_gap: NOTICE_WARNING_GAP,
                     content_gap: NOTICE_WARNING_CONTENT_GAP,
                 },
@@ -353,6 +378,7 @@ pub(super) fn render_activity_stream_unit(
                     summary: message,
                     details: None,
                     accessible_kind: crate::i18n::text("Codex turn 失败"),
+                    terminal_error: true,
                     outer_gap: NOTICE_ERROR_GAP,
                     content_gap: NOTICE_ERROR_CONTENT_GAP,
                 },

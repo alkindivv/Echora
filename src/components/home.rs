@@ -66,9 +66,7 @@ use context::{
     ConversationRenderContext, CurrentTurnRows, DisclosureRenderState, MainConversationSnapshot,
 };
 
-use animation::{
-    reasoning_transition_ease, thinking_shimmer_progress, tool_group_chevron_transition_ease,
-};
+use animation::{reasoning_transition_ease, tool_group_chevron_transition_ease};
 use conversation::{
     conversation_list_state, scroll_should_follow_output, subagent_conversation,
     sync_list_item_count,
@@ -715,7 +713,7 @@ impl HomeView {
                     this.conversation_list
                         .remeasure_items(item_count.saturating_sub(2)..item_count);
                 }
-                let needs_shimmer = composer.conversation_phase() == ConversationPhase::Thinking
+                let needs_shimmer = composer.is_running()
                     || composer.has_active_context_compaction()
                     || composer.has_active_image_generation()
                     || composer.has_active_plan();
@@ -754,7 +752,7 @@ impl HomeView {
         self.hook_tooltip_focus = None;
         self.command_scroll_handles.clear();
         self.expanded_collaborations.clear();
-        let needs_shimmer = composer.conversation_phase() == ConversationPhase::Thinking
+        let needs_shimmer = composer.is_running()
             || composer.has_active_context_compaction()
             || composer.has_active_image_generation()
             || composer.has_active_plan();
@@ -846,9 +844,9 @@ impl HomeView {
     fn sync_thinking_shimmer(&mut self, needs_shimmer: bool, cx: &mut Context<Self>) {
         if needs_shimmer {
             if cx.reduce_motion() {
-                if self.thinking_shimmer_running || self.thinking_shimmer_progress != 0.5 {
+                if self.thinking_shimmer_running || self.thinking_shimmer_progress != 0.0 {
                     self.thinking_shimmer_cycle = self.thinking_shimmer_cycle.wrapping_add(1);
-                    self.thinking_shimmer_progress = 0.5;
+                    self.thinking_shimmer_progress = 0.0;
                     self.thinking_shimmer_running = false;
                     cx.notify();
                 }
@@ -869,8 +867,9 @@ impl HomeView {
         self.thinking_shimmer_running = true;
         cx.notify();
 
+        let started = cx.background_executor().now();
         cx.spawn(async move |this, cx| {
-            let mut step = 1usize;
+            let mut last_second = 0;
             loop {
                 cx.background_executor()
                     .timer(THINKING_SHIMMER_FRAME_INTERVAL)
@@ -881,14 +880,21 @@ impl HomeView {
                             return false;
                         }
                         if cx.reduce_motion() {
-                            this.thinking_shimmer_progress = 0.5;
+                            this.thinking_shimmer_progress = 0.0;
                             this.thinking_shimmer_running = false;
                             cx.notify();
                             return false;
                         }
-                        let elapsed =
-                            THINKING_SHIMMER_DURATION.mul_f32(step as f32 / THINKING_SHIMMER_STEPS);
-                        this.thinking_shimmer_progress = thinking_shimmer_progress(elapsed);
+                        let elapsed = cx
+                            .background_executor()
+                            .now()
+                            .saturating_duration_since(started);
+                        this.thinking_shimmer_progress =
+                            animation::cadenced_shimmer_progress(elapsed);
+                        if elapsed.as_secs() != last_second {
+                            last_second = elapsed.as_secs();
+                            this.refresh_conversation_cache(cx);
+                        }
                         // A scheduled frame alone reuses the previous element
                         // tree. Notify the view so the Canvas captures the new
                         // cadence step before it paints.
@@ -899,7 +905,6 @@ impl HomeView {
                 if !should_continue {
                     return;
                 }
-                step = step % THINKING_SHIMMER_STEPS as usize + 1;
             }
         })
         .detach();
@@ -1951,10 +1956,7 @@ impl Render for HomeView {
                     theme,
                     thinking_shimmer_progress: self.thinking_shimmer_progress,
                     streaming_fade: self.streaming_fade.clone(),
-                    streaming_message_id: self
-                        .streaming_reveal
-                        .as_ref()
-                        .map(|reveal| reveal.item_id().to_owned()),
+                    streaming_message_id: self.composer.read(cx).streaming_assistant_message_id(),
                     response_feedback: self.response_feedback,
                     user_message_actions_visible_for_capture: self
                         .user_message_actions_visible_for_capture,
@@ -1997,10 +1999,7 @@ impl Render for HomeView {
                     theme,
                     thinking_shimmer_progress: self.thinking_shimmer_progress,
                     streaming_fade: self.streaming_fade.clone(),
-                    streaming_message_id: self
-                        .streaming_reveal
-                        .as_ref()
-                        .map(|reveal| reveal.item_id().to_owned()),
+                    streaming_message_id: self.composer.read(cx).streaming_assistant_message_id(),
                     response_feedback: self.response_feedback,
                     user_message_actions_visible_for_capture: false,
                     disclosures: Rc::new(DisclosureRenderState {

@@ -405,6 +405,22 @@ fn a_model_without_reasoning_effort_sends_null_instead_of_an_empty_enum() {
 }
 
 #[test]
+fn resuming_an_existing_turn_sends_no_empty_user_message() {
+    let mut request = super::request("", Some("thread"));
+    request.context.plan_mode = None;
+    let params =
+        super::super::turn::build_turn_start_params(&request, "thread", false, &[]).unwrap();
+    assert_eq!(params["input"], json!([]));
+    request.context.files.push(crate::agent::AgentInputFile {
+        path: "/tmp/image.png".into(),
+        image: true,
+    });
+    let params =
+        super::super::turn::build_turn_start_params(&request, "thread", false, &[]).unwrap();
+    assert!(!params["input"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn closing_side_chat_cancels_permission_confirmation_and_rejects_queued_changes() {
     let (manager, spawner) = manager_with_fake();
     let opened = manager.open_side_conversation(side_request());

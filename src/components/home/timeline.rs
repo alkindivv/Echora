@@ -60,6 +60,9 @@ pub(super) enum ActivityStreamUnit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ConversationListRow {
     FileSummary(DiffReviewPresentation),
+    Working {
+        label: String,
+    },
     ResumedWork {
         id: String,
         label: String,
@@ -92,7 +95,9 @@ pub(super) enum ConversationListRow {
         unit: ActivityStreamUnit,
         show_thinking_tail: bool,
     },
-    Thinking,
+    Thinking {
+        label: String,
+    },
     CurrentResponseFooter {
         id: String,
         message: String,
@@ -791,7 +796,25 @@ pub(super) fn conversation_list_rows(
     let has_active_reasoning = conversation_activity.iter().any(|activity| {
         matches!(activity, ConversationActivity::Reasoning(reasoning) if reasoning.is_active())
     });
-    let show_thinking_tail = conversation_status(phase).is_some() && !has_active_reasoning;
+    let final_visible = resumed_turn.as_ref().is_some_and(|turn| {
+        conversation_activity.iter().any(|activity| {
+            matches!(activity,
+            ConversationActivity::AssistantMessage { item_id, text }
+                if turn.final_message_ids.contains(item_id) && !text.trim().is_empty())
+        })
+    });
+    let active_tool = conversation_activity.iter().any(|activity| match activity {
+        ConversationActivity::Command(c) => c.status == CommandExecutionStatus::InProgress,
+        ConversationActivity::FileChange(c) => c.status == AgentFileChangeStatus::InProgress,
+        ConversationActivity::McpToolCall(c) => c.status == AgentMcpToolCallStatus::InProgress,
+        _ => false,
+    });
+    let show_thinking_tail = matches!(
+        phase,
+        ConversationPhase::Starting | ConversationPhase::Thinking | ConversationPhase::Streaming
+    ) && !has_active_reasoning
+        && !active_tool
+        && !final_visible;
     let mut rows = Vec::new();
     for (turn_index, turn) in transcript.into_iter().enumerate() {
         if !turn.user_message.is_empty() || !turn.user_images.is_empty() {
@@ -825,7 +848,7 @@ pub(super) fn conversation_list_rows(
         if turn.resumed.is_some()
             && matches!(
                 turn.phase,
-                ConversationPhase::Complete | ConversationPhase::Failed
+                ConversationPhase::Complete | ConversationPhase::Stopped
             )
             && !turn.assistant_message.is_empty()
         {
@@ -846,19 +869,9 @@ pub(super) fn conversation_list_rows(
             }
         }
     }
-    let hook_input = conversation_activity.iter().any(|activity| {
-        matches!(
-            activity,
-            ConversationActivity::HookPrompt(_) | ConversationActivity::HookSummary(_)
-        )
-    });
-    // Hook input never stands in for a missing human message.
     if message_edit_active && !user_message.is_empty() {
         rows.push(ConversationListRow::MessageEdit { text: user_message });
-    } else if !user_message.is_empty()
-        || !user_images.is_empty()
-        || (phase != ConversationPhase::Empty && !hook_input)
-    {
+    } else if !user_message.is_empty() || !user_images.is_empty() {
         rows.push(ConversationListRow::CurrentUser {
             message: user_message,
             images: user_images,
@@ -885,11 +898,18 @@ pub(super) fn conversation_list_rows(
         );
     }
     if show_thinking_tail {
-        rows.push(ConversationListRow::Thinking);
+        rows.push(ConversationListRow::Thinking {
+            label: crate::i18n::text(if phase == ConversationPhase::Starting {
+                "正在启动任务"
+            } else {
+                "正在思考"
+            })
+            .to_owned(),
+        });
     }
     if matches!(
         phase,
-        ConversationPhase::Complete | ConversationPhase::Failed
+        ConversationPhase::Complete | ConversationPhase::Stopped
     ) && !assistant_message.is_empty()
     {
         if let Some(review) = resumed_file_summary(conversation_activity, resumed_turn.as_ref()) {
@@ -985,13 +1005,20 @@ pub(super) fn append_turn_activity_rows(
 ) {
     let units = activity_stream_units(activities);
     let final_start = resumed.and_then(|turn| units.iter().position(|unit| {
-        matches!(unit, ActivityStreamUnit::Standalone(ConversationActivity::AssistantMessage { item_id, .. })
-            if turn.final_message_ids.contains(item_id))
+        matches!(unit, ActivityStreamUnit::Standalone(ConversationActivity::AssistantMessage { item_id, text })
+            if turn.final_message_ids.contains(item_id) && !text.trim().is_empty())
     }));
-    // Keep errors, interrupted turns, approvals and unfinished work visible.
-    // Only a completed prefix preceding an identified answer is collapsible.
-    if let (ConversationPhase::Complete, Some(turn), Some(final_start)) =
-        (phase, resumed, final_start)
+    let running = matches!(
+        phase,
+        ConversationPhase::Starting
+            | ConversationPhase::Thinking
+            | ConversationPhase::Streaming
+            | ConversationPhase::Stopping
+    );
+    // The final reply has the same work disclosure while streaming and after
+    // completion. Errors stay outside it so a failed turn remains inspectable.
+    if let (Some(turn), Some(final_start)) = (resumed, final_start)
+        && phase != ConversationPhase::Failed
         && final_start > 0
         && units[..final_start].iter().any(|unit| {
             !matches!(
@@ -1000,10 +1027,10 @@ pub(super) fn append_turn_activity_rows(
             )
         })
     {
-        let expanded = expanded_turns.contains(&turn.id);
+        let expanded = expanded_turns.contains(&turn.id) != (phase == ConversationPhase::Stopped);
         rows.push(ConversationListRow::ResumedWork {
             id: turn.id.clone(),
-            label: resumed_work_label(turn.duration_ms),
+            label: work_label(phase, turn.duration_ms),
             expanded,
         });
         rows.extend(units.into_iter().enumerate().filter_map(|(index, unit)| {
@@ -1023,10 +1050,42 @@ pub(super) fn append_turn_activity_rows(
             })
         }));
     } else {
+        if running && let Some(turn) = resumed && units.iter().any(|unit| !matches!(unit,
+            ActivityStreamUnit::Standalone(ConversationActivity::AssistantMessage { text, .. }) if text.trim().is_empty()))
+            && !units.iter().all(|unit| matches!(unit,
+                ActivityStreamUnit::Standalone(ConversationActivity::AssistantMessage { item_id, .. }) if turn.final_message_ids.contains(item_id)))
+        {
+            rows.push(ConversationListRow::Working { label: work_label(phase, turn.duration_ms) });
+        }
         rows.extend(units.into_iter().map(|unit| ConversationListRow::Activity {
             unit,
             show_thinking_tail,
         }));
+    }
+}
+
+fn work_label(phase: ConversationPhase, duration_ms: Option<i64>) -> String {
+    let seconds = duration_ms.unwrap_or_default().max(0) / 1000;
+    let elapsed = if seconds >= 60 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}s")
+    };
+    match phase {
+        ConversationPhase::Starting
+        | ConversationPhase::Thinking
+        | ConversationPhase::Streaming
+        | ConversationPhase::Stopping => {
+            if seconds == 0 {
+                crate::i18n::text("正在工作").to_owned()
+            } else {
+                crate::i18n::format!("已工作 {elapsed}" => "Working for {elapsed}")
+            }
+        }
+        ConversationPhase::Stopped => {
+            crate::i18n::format!("你在 {elapsed} 后停止" => "You stopped after {elapsed}")
+        }
+        _ => resumed_work_label(duration_ms),
     }
 }
 

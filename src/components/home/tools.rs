@@ -7,8 +7,9 @@ use std::{
 };
 
 use gpui::{
-    App, BoxShadow, Div, Entity, FontWeight, IntoElement, Role, ScrollHandle, SharedString,
-    Transformation, div, linear_color_stop, linear_gradient, prelude::*, px, radians, rgba,
+    App, BoxShadow, Div, Entity, FontWeight, IntoElement, RenderOnce, Role, ScrollHandle,
+    SharedString, TextRun, Transformation, Window, div, linear_color_stop, linear_gradient,
+    prelude::*, px, radians, rgba,
 };
 
 use super::{
@@ -38,6 +39,40 @@ use crate::{
     conversation::ConversationActivity,
     theme::{Theme, UI_MONOSPACE_FONT_FAMILY},
 };
+
+#[derive(IntoElement)]
+struct RunningToolLabel {
+    home: Entity<HomeView>,
+    text: String,
+    theme: Theme,
+}
+
+impl RenderOnce for RunningToolLabel {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let mut font = window.text_style().font();
+        font.family = ".SystemUIFont".into();
+        font.weight = FontWeight::NORMAL;
+        let line = window.text_system().shape_line(
+            self.text.clone().into(),
+            px(14.0),
+            &[TextRun {
+                len: self.text.len(),
+                font,
+                color: self.theme.text.into(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }],
+            None,
+        );
+        super::animation::shimmer_label(
+            self.text,
+            f32::from(line.width).min(696.0),
+            self.theme,
+            self.home.read(cx).thinking_shimmer_progress,
+        )
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ToolGroupDisclosureTransition {
@@ -168,6 +203,7 @@ pub(super) fn tool_activity_group(
         crate::i18n::format!("{}，展开工具调用" => "{}, expand tool calls", summary.text)
     };
     let hover_group: SharedString = format!("tool-activity-group-{group_id}").into();
+    let running_label_home = home_entity.clone();
     let click_home = home_entity.clone();
     let click_group_id = group_id.clone();
     let click_scroll = scroll_handle.clone();
@@ -312,7 +348,16 @@ pub(super) fn tool_activity_group(
                                 .line_height(px(TOOL_GROUP_LINE_HEIGHT))
                                 .font_family(".SystemUIFont")
                                 .font_weight(FontWeight::NORMAL)
-                                .child(summary.text),
+                                .child(if active {
+                                    RunningToolLabel {
+                                        home: running_label_home,
+                                        text: summary.text,
+                                        theme,
+                                    }
+                                    .into_any_element()
+                                } else {
+                                    div().child(summary.text).into_any_element()
+                                }),
                         ),
                 )
                 .child(
@@ -714,6 +759,8 @@ pub(super) fn command_activity(
     let key_scroll = scroll_handle.clone();
     let nested_scroll_handle = scroll_handle.clone();
 
+    let running_label_home = home_entity.clone();
+
     div()
         .w_full()
         .min_w(px(0.0))
@@ -777,7 +824,16 @@ pub(super) fn command_activity(
                                 .text_size(px(14.0))
                                 .line_height(px(21.0))
                                 .font_family(".SystemUIFont")
-                                .child(summary.text),
+                                .child(if command.status == CommandExecutionStatus::InProgress {
+                                    RunningToolLabel {
+                                        home: running_label_home,
+                                        text: summary.text,
+                                        theme,
+                                    }
+                                    .into_any_element()
+                                } else {
+                                    div().child(summary.text).into_any_element()
+                                }),
                         ),
                 )
                 .child(

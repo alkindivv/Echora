@@ -13,6 +13,7 @@ impl ConversationState {
         self.commit_current_turn();
         self.turn_id = None;
         self.resumed_turn = None;
+        self.live_timing.start(std::time::Instant::now());
         self.assistant_message_phases.clear();
         self.completed_assistant_messages.clear();
         self.turn_identity = None;

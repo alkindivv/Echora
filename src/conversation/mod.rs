@@ -31,6 +31,7 @@ pub(crate) use submissions::{
     SubmissionDraft, SubmissionStatus, UserSubmission, new_client_message_id,
 };
 mod stream;
+mod timing;
 mod transcript;
 
 pub(crate) use activity::{ConversationActivity, ReasoningActivityPresentation};

@@ -306,6 +306,7 @@ impl ConversationState {
         self.phase = ConversationPhase::Failed;
     }
     pub(crate) fn hydrate_history(&mut self, history: ThreadHistory) {
+        self.live_timing = Default::default();
         self.change_runtime_scope(Some(&history.thread.thread_id));
         self.reconcile_history_submissions(&history);
         self.history_stale = false;
@@ -635,6 +636,36 @@ impl ConversationState {
     }
     pub(crate) fn resumed_turn(&self) -> Option<ResumedTurnPresentation> {
         self.resumed_turn.clone()
+    }
+
+    /// Live work stops accumulating when the final answer begins. Server
+    /// timing remains intact for history, which does not include that boundary.
+    pub(crate) fn turn_presentation(&self) -> Option<ResumedTurnPresentation> {
+        let mut turn = self.resumed_turn()?;
+        if self
+            .live_timing
+            .work_duration_ms(None, std::time::Instant::now())
+            .is_some()
+        {
+            turn.final_message_ids =
+                final_message_ids(self.activities.iter().filter_map(|activity| {
+                    if let ConversationActivity::AssistantMessage { item_id, .. } = activity {
+                        Some((
+                            item_id.as_str(),
+                            self.assistant_message_phases
+                                .get(item_id)
+                                .and_then(|p| p.as_deref()),
+                        ))
+                    } else {
+                        None
+                    }
+                }));
+            let answer = turn.final_message_ids.last().map(String::as_str);
+            turn.duration_ms = self
+                .live_timing
+                .work_duration_ms(answer, std::time::Instant::now());
+        }
+        Some(turn)
     }
     /// The assistant message whose text is still arriving: the newest
     /// message of a running turn without a completion snapshot. ChatGPT

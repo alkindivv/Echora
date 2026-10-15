@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use gpui::{
-    App, Bounds, ContentMask, FontWeight, ShapedLine, TextAlign, TextRun, Window, canvas, div,
-    point, prelude::*, px, rgba,
+    App, Bounds, ContentMask, FontWeight, ShapedLine, SharedString, TextAlign, TextRun, Window,
+    canvas, div, point, prelude::*, px, rgba,
 };
 
 use super::{
@@ -19,6 +19,13 @@ pub(super) fn thinking_shimmer_step(progress: f32) -> f32 {
 
 pub(super) fn thinking_shimmer_progress(elapsed: Duration) -> f32 {
     (elapsed.as_secs_f32() / THINKING_SHIMMER_DURATION.as_secs_f32()).clamp(0.0, 1.0)
+}
+
+pub(super) fn cadenced_shimmer_progress(elapsed: Duration) -> f32 {
+    let Some(elapsed) = elapsed.checked_sub(Duration::from_millis(600)) else {
+        return 0.0;
+    };
+    thinking_shimmer_progress(Duration::from_secs_f32(elapsed.as_secs_f32() % 4.0))
 }
 
 pub(super) fn thinking_shimmer_band_left(progress: f32, text_width: f32) -> f32 {
@@ -61,81 +68,89 @@ pub(super) fn thinking_shimmer(theme: Theme, progress: f32) -> impl IntoElement 
 }
 
 pub(super) fn shimmer_label(
-    label: &'static str,
+    label: impl Into<SharedString>,
     width: f32,
     theme: Theme,
     progress: f32,
 ) -> impl IntoElement {
-    div().w(px(width)).h(px(21.0)).child(
-        canvas(
-            move |_, window, _| {
-                let mut font = window.text_style().font();
-                font.family = ".SystemUIFont".into();
-                font.weight = FontWeight::NORMAL;
-                let shape = |color| {
-                    window.text_system().shape_line(
-                        label.into(),
-                        px(14.0),
-                        &[TextRun {
-                            len: label.len(),
-                            font: font.clone(),
-                            color,
-                            background_color: None,
-                            underline: None,
-                            strikethrough: None,
-                        }],
-                        None,
-                    )
-                };
-                let base = shape(theme.text.alpha(0.385).into());
-                let highlights = (1..=THINKING_SHIMMER_ALPHA_LEVELS)
-                    .map(|level| {
-                        shape(
-                            rgba(0xffffff00)
-                                .alpha(0.75 * level as f32 / THINKING_SHIMMER_ALPHA_LEVELS as f32)
-                                .into(),
+    let label = label.into();
+    div()
+        .w(px(width))
+        .max_w_full()
+        .h(px(21.0))
+        .overflow_hidden()
+        .child(
+            canvas(
+                move |_, window, _| {
+                    let mut font = window.text_style().font();
+                    font.family = ".SystemUIFont".into();
+                    font.weight = FontWeight::NORMAL;
+                    let shape = |color| {
+                        window.text_system().shape_line(
+                            label.clone(),
+                            px(14.0),
+                            &[TextRun {
+                                len: label.len(),
+                                font: font.clone(),
+                                color,
+                                background_color: None,
+                                underline: None,
+                                strikethrough: None,
+                            }],
+                            None,
                         )
-                    })
-                    .collect::<Vec<_>>();
-                (base, highlights)
-            },
-            move |bounds,
-                  (base, highlights): (ShapedLine, Vec<ShapedLine>),
-                  window: &mut Window,
-                  cx: &mut App| {
-                let origin = bounds.origin;
-                base.paint(origin, px(21.0), TextAlign::Left, None, window, cx)
-                    .expect("context compaction shimmer base glyphs should paint");
+                    };
+                    let base = shape(theme.text.alpha(0.385).into());
+                    let highlights = (1..=THINKING_SHIMMER_ALPHA_LEVELS)
+                        .map(|level| {
+                            shape(
+                                rgba(0xffffff00)
+                                    .alpha(
+                                        0.75 * level as f32 / THINKING_SHIMMER_ALPHA_LEVELS as f32,
+                                    )
+                                    .into(),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    (base, highlights)
+                },
+                move |bounds,
+                      (base, highlights): (ShapedLine, Vec<ShapedLine>),
+                      window: &mut Window,
+                      cx: &mut App| {
+                    let origin = bounds.origin;
+                    base.paint(origin, px(21.0), TextAlign::Left, None, window, cx)
+                        .expect("context compaction shimmer base glyphs should paint");
 
-                let text_width = f32::from(bounds.size.width);
-                let band_width = text_width * THINKING_SHIMMER_BAND_SCALE;
-                let band_left =
-                    f32::from(bounds.origin.x) + thinking_shimmer_band_left(progress, text_width);
-                let first_x = band_left.floor().max(f32::from(bounds.left()));
-                let last_x = (band_left + band_width)
-                    .ceil()
-                    .min(f32::from(bounds.right()));
-                for x in first_x as i32..last_x as i32 {
-                    let band_position = (x as f32 + 0.5 - band_left) / band_width;
-                    let alpha = thinking_shimmer_alpha(band_position);
-                    if alpha <= 0.0 {
-                        continue;
+                    let text_width = f32::from(base.width);
+                    let band_width = text_width * THINKING_SHIMMER_BAND_SCALE;
+                    let band_left = f32::from(bounds.origin.x)
+                        + thinking_shimmer_band_left(progress, text_width);
+                    let first_x = band_left.floor().max(f32::from(bounds.left()));
+                    let last_x = (band_left + band_width)
+                        .ceil()
+                        .min(f32::from(bounds.right()));
+                    for x in first_x as i32..last_x as i32 {
+                        let band_position = (x as f32 + 0.5 - band_left) / band_width;
+                        let alpha = thinking_shimmer_alpha(band_position);
+                        if alpha <= 0.0 {
+                            continue;
+                        }
+                        let level = ((alpha / 0.75 * THINKING_SHIMMER_ALPHA_LEVELS as f32).ceil()
+                            as usize)
+                            .clamp(1, THINKING_SHIMMER_ALPHA_LEVELS);
+                        let mask = Bounds::from_corners(
+                            point(px(x as f32), bounds.top()),
+                            point(px(x as f32 + 1.0), bounds.bottom()),
+                        );
+                        window.with_content_mask(Some(ContentMask { bounds: mask }), |window| {
+                            highlights[level - 1]
+                                .paint(origin, px(21.0), TextAlign::Left, None, window, cx)
+                                .expect("context compaction shimmer highlight glyphs should paint");
+                        });
                     }
-                    let level = ((alpha / 0.75 * THINKING_SHIMMER_ALPHA_LEVELS as f32).ceil()
-                        as usize)
-                        .clamp(1, THINKING_SHIMMER_ALPHA_LEVELS);
-                    let mask = Bounds::from_corners(
-                        point(px(x as f32), bounds.top()),
-                        point(px(x as f32 + 1.0), bounds.bottom()),
-                    );
-                    window.with_content_mask(Some(ContentMask { bounds: mask }), |window| {
-                        highlights[level - 1]
-                            .paint(origin, px(21.0), TextAlign::Left, None, window, cx)
-                            .expect("context compaction shimmer highlight glyphs should paint");
-                    });
-                }
-            },
+                },
+            )
+            .size_full(),
         )
-        .size_full(),
-    )
 }

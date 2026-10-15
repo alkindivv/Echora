@@ -61,6 +61,7 @@ pub(super) fn notice_activity(
         summary,
         details,
         accessible_kind,
+        terminal_error,
         outer_gap,
         content_gap,
     } = notice;
@@ -78,7 +79,11 @@ pub(super) fn notice_activity(
         .flex_col()
         .gap(px(content_gap))
         .text_size(px(NOTICE_TEXT_SIZE))
-        .line_height(px(NOTICE_LINE_HEIGHT))
+        .line_height(px(if terminal_error {
+            21.125
+        } else {
+            NOTICE_LINE_HEIGHT
+        }))
         .text_color(theme.text)
         .child(summary)
         .when_some(
@@ -91,22 +96,48 @@ pub(super) fn notice_activity(
         .role(Role::Alert)
         .aria_label(accessible_label)
         .w_full()
-        .py(px(8.0))
-        .pl(px(12.0))
-        .pr(px(8.0))
+        .py(px(if terminal_error { 16.0 } else { 8.0 }))
+        .pl(px(if terminal_error { 20.0 } else { 12.0 }))
+        .pr(px(if terminal_error { 12.0 } else { 8.0 }))
         .flex()
         .items_center()
         .gap(px(outer_gap))
-        .rounded(px(NOTICE_RADIUS))
+        .rounded(px(if terminal_error { 25.0 } else { NOTICE_RADIUS }))
         .bg(theme.surface)
-        .shadow(vec![
-            BoxShadow::new(px(0.0), px(0.0), theme.command_border.into()).spread_radius(px(0.5)),
-            BoxShadow::new(px(0.0), px(1.0), rgba(0x0000000d).into()).blur_radius(px(2.0)),
-        ])
+        .shadow(if terminal_error {
+            vec![
+                BoxShadow::new(px(0.0), px(0.0), theme.command_border.into())
+                    .spread_radius(px(0.5)),
+                BoxShadow::new(px(0.0), px(0.0), rgba(0x0000000d).into()).blur_radius(px(2.0)),
+                BoxShadow::new(px(0.0), px(4.0), rgba(0x00000005).into()).blur_radius(px(6.0)),
+            ]
+        } else {
+            vec![
+                BoxShadow::new(px(0.0), px(0.0), theme.command_border.into())
+                    .spread_radius(px(0.5)),
+                BoxShadow::new(px(0.0), px(1.0), rgba(0x0000000d).into()).blur_radius(px(2.0)),
+            ]
+        })
         .child(
-            icon("settings-warning", theme.warning.into())
-                .size(px(NOTICE_ICON_SIZE))
-                .flex_none(),
+            icon(
+                if terminal_error {
+                    "conversation-error"
+                } else {
+                    "settings-warning"
+                },
+                if terminal_error {
+                    theme.text
+                } else {
+                    theme.warning
+                }
+                .into(),
+            )
+            .size(px(if terminal_error {
+                16.0
+            } else {
+                NOTICE_ICON_SIZE
+            }))
+            .flex_none(),
         )
         .child(content)
 }
@@ -118,6 +149,7 @@ pub(crate) fn thread_owner_warning(theme: Theme) -> impl IntoElement {
             summary: crate::i18n::text("此会话正由另一个 app-server 使用，请释放后重试。").into(),
             details: None,
             accessible_kind: crate::i18n::text("Codex 警告"),
+            terminal_error: false,
             outer_gap: super::NOTICE_WARNING_GAP,
             content_gap: super::NOTICE_WARNING_CONTENT_GAP,
         },

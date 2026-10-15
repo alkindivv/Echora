@@ -378,8 +378,28 @@ pub(super) fn conversation(
                     0.0,
                     16.0,
                 ),
-                ConversationListRow::Thinking => (
-                    thinking_shimmer(theme, thinking_shimmer_progress).into_any_element(),
+                ConversationListRow::Thinking { label } => (
+                    super::animation::shimmer_label(
+                        label,
+                        CONVERSATION_CONTENT_MAX_WIDTH,
+                        theme,
+                        thinking_shimmer_progress,
+                    )
+                    .into_any_element(),
+                    0.0,
+                    16.0,
+                ),
+                ConversationListRow::Working { label } => (
+                    div()
+                        .w_full()
+                        .pb(px(4.0))
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .text_size(px(14.0))
+                        .line_height(px(23.0))
+                        .text_color(theme.text.alpha(0.6))
+                        .child(label)
+                        .into_any_element(),
                     0.0,
                     16.0,
                 ),

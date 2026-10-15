@@ -127,6 +127,7 @@ pub(super) struct NoticePresentation {
     pub(super) summary: String,
     pub(super) details: Option<String>,
     pub(super) accessible_kind: &'static str,
+    pub(super) terminal_error: bool,
     pub(super) outer_gap: f32,
     pub(super) content_gap: f32,
 }

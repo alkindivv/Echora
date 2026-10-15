@@ -371,7 +371,13 @@ pub(super) fn build_turn_start_params(
 ) -> Result<Value> {
     let mut params = serde_json::Map::new();
     params.insert("threadId".into(), json!(thread_id));
-    let input = super::super::input::encode_input(&request.prompt, &request.context)?;
+    // Resuming an interrupted task continues its existing input; an empty
+    // text item is a different request and is rejected by some providers.
+    let input = if !is_new_thread && request.prompt.is_empty() && request.context.files.is_empty() {
+        json!([])
+    } else {
+        super::super::input::encode_input(&request.prompt, &request.context)?
+    };
     params.insert("input".into(), input);
     if let Some(id) = &request.client_message_id {
         params.insert("clientUserMessageId".into(), json!(id));

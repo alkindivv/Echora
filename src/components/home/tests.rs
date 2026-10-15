@@ -26,15 +26,15 @@ use super::{
     RESPONSE_ACTION_FOOTER_HEIGHT, RESPONSE_ACTION_FOOTER_OFFSET, RESPONSE_ACTION_GAP,
     RESPONSE_ACTION_ICON_SIZE, RESPONSE_TIME_LINE_HEIGHT, RESPONSE_TIME_MARGIN, RESPONSE_TIME_SIZE,
     RetryImageGeneration, THINKING_SHIMMER_DURATION, THINKING_SHIMMER_FRAME_INTERVAL,
-    THINKING_SHIMMER_STEPS, THINKING_SHIMMER_WIDTH, TOOL_GROUP_BODY_MAX_HEIGHT,
-    TOOL_GROUP_CHEVRON_SIZE, TOOL_GROUP_EDGE_FADE_DISTANCE, TOOL_GROUP_HEADER_CHEVRON_GAP,
-    TOOL_GROUP_HEADER_HEIGHT, TOOL_GROUP_ICON_SIZE, TOOL_GROUP_ICON_TEXT_GAP, TOOL_GROUP_ITEM_GAP,
-    TOOL_GROUP_LINE_HEIGHT, TOOL_GROUP_TEXT_SIZE, TOOL_GROUP_TRANSITION_DURATION,
-    USER_MESSAGE_BUBBLE_RADIUS, USER_MESSAGE_BUBBLE_SUPERELLIPSE, USER_MESSAGE_FOOTER_GAP,
-    USER_MESSAGE_FOOTER_HEIGHT, USER_MESSAGE_FOOTER_OFFSET, USER_MESSAGE_FOOTER_SIDE_MARGIN,
-    USER_MESSAGE_HORIZONTAL_PADDING, USER_MESSAGE_LINE_HEIGHT, USER_MESSAGE_MAX_WIDTH_RATIO,
-    USER_MESSAGE_PARAGRAPH_GAP, USER_MESSAGE_TEXT_SIZE, USER_MESSAGE_TIME_LINE_HEIGHT,
-    USER_MESSAGE_TIME_SIZE, USER_MESSAGE_VERTICAL_PADDING,
+    THINKING_SHIMMER_WIDTH, TOOL_GROUP_BODY_MAX_HEIGHT, TOOL_GROUP_CHEVRON_SIZE,
+    TOOL_GROUP_EDGE_FADE_DISTANCE, TOOL_GROUP_HEADER_CHEVRON_GAP, TOOL_GROUP_HEADER_HEIGHT,
+    TOOL_GROUP_ICON_SIZE, TOOL_GROUP_ICON_TEXT_GAP, TOOL_GROUP_ITEM_GAP, TOOL_GROUP_LINE_HEIGHT,
+    TOOL_GROUP_TEXT_SIZE, TOOL_GROUP_TRANSITION_DURATION, USER_MESSAGE_BUBBLE_RADIUS,
+    USER_MESSAGE_BUBBLE_SUPERELLIPSE, USER_MESSAGE_FOOTER_GAP, USER_MESSAGE_FOOTER_HEIGHT,
+    USER_MESSAGE_FOOTER_OFFSET, USER_MESSAGE_FOOTER_SIDE_MARGIN, USER_MESSAGE_HORIZONTAL_PADDING,
+    USER_MESSAGE_LINE_HEIGHT, USER_MESSAGE_MAX_WIDTH_RATIO, USER_MESSAGE_PARAGRAPH_GAP,
+    USER_MESSAGE_TEXT_SIZE, USER_MESSAGE_TIME_LINE_HEIGHT, USER_MESSAGE_TIME_SIZE,
+    USER_MESSAGE_VERTICAL_PADDING,
     animation::{
         reasoning_transition_ease, thinking_shimmer_alpha, thinking_shimmer_band_left,
         thinking_shimmer_progress, thinking_shimmer_step, tool_group_chevron_transition_ease,
@@ -462,35 +462,28 @@ fn collaboration_disclosure_fixture_and_panel_event_keep_stable_identity() {
     );
 }
 
-#[test]
-fn collaboration_row_opens_the_subagent_panel_with_pointer_and_keyboard() {
-    let mut app = TestApp::new();
-    let mut window = app.open_window_with_options(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
-                origin: point(px(0.0), px(0.0)),
-                size: size(px(900.0), px(700.0)),
-            })),
-            ..Default::default()
-        },
-        |_, cx| HomeView::new(ThemeMode::Light, cx),
-    );
-    window.update(|home, _, cx| home.set_collaboration_for_capture("running", cx));
-
+#[gpui::test]
+fn collaboration_row_opens_the_subagent_panel_with_pointer_and_keyboard(
+    cx: &mut gpui::TestAppContext,
+) {
+    let window = cx.add_window(|_, cx| HomeView::new(ThemeMode::Light, cx));
+    let home = cx.update(|cx| window.root(cx).unwrap());
     let opened = Arc::new(Mutex::new(None));
     let observed = opened.clone();
-    let home = window.root();
-    let _observer = app.new_entity(|cx| {
-        cx.subscribe(&home, move |_: &mut (), _, event: &OpenSubAgentPanel, _| {
-            *observed.lock().unwrap() = Some(event.clone());
-        })
+    home.update(cx, |view, cx| {
+        view.set_collaboration_for_capture("running", cx);
+        cx.subscribe(
+            &home,
+            move |_: &mut HomeView, _, event: &OpenSubAgentPanel, _| {
+                *observed.lock().unwrap() = Some(event.clone());
+            },
+        )
         .detach();
     });
-
-    window.draw();
-    // TestApp's titlebar inset places the first 21 px activity header at
-    // y=166..187. This point is inside the focusable agent label.
-    window.simulate_click(point(px(180.0), px(180.0)), MouseButton::Left);
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    let agent = visual.debug_bounds("collaboration-agent").unwrap();
+    visual.simulate_click(agent.center(), Default::default());
     assert_eq!(
         *opened.lock().unwrap(),
         Some(OpenSubAgentPanel {
@@ -500,7 +493,7 @@ fn collaboration_row_opens_the_subagent_panel_with_pointer_and_keyboard() {
     );
     *opened.lock().unwrap() = None;
 
-    window.simulate_keystrokes("space");
+    visual.simulate_keystrokes("space");
     assert_eq!(
         *opened.lock().unwrap(),
         Some(OpenSubAgentPanel {
@@ -1664,7 +1657,7 @@ fn tool_group_disclosure_starts_settled_then_runs_the_reference_transition() {
 }
 
 #[test]
-fn thinking_shimmer_timer_advances_and_loops_the_rendered_phase() {
+fn thinking_shimmer_timer_observes_the_initial_delay_and_four_second_cadence() {
     let mut app = TestApp::new();
     let home = app.new_entity(|cx| HomeView::new(ThemeMode::Dark, cx));
 
@@ -1674,24 +1667,19 @@ fn thinking_shimmer_timer_advances_and_loops_the_rendered_phase() {
         0.0
     );
 
-    app.advance_clock(THINKING_SHIMMER_FRAME_INTERVAL);
+    app.advance_clock(Duration::from_millis(600));
     app.run_until_parked();
     let progress = app.read_entity(&home, |home, _| home.thinking_shimmer_progress);
-    assert!((progress - 1.0 / THINKING_SHIMMER_STEPS).abs() < 0.000_001);
+    assert!(progress < 0.001);
 
-    for _ in 1..THINKING_SHIMMER_STEPS as usize {
-        app.advance_clock(THINKING_SHIMMER_FRAME_INTERVAL);
-        app.run_until_parked();
-    }
-    assert_eq!(
-        app.read_entity(&home, |home, _| home.thinking_shimmer_progress),
-        1.0
-    );
+    app.advance_clock(Duration::from_millis(1000));
+    app.run_until_parked();
+    assert!(app.read_entity(&home, |home, _| home.thinking_shimmer_progress) > 0.97);
 
-    app.advance_clock(THINKING_SHIMMER_FRAME_INTERVAL);
+    app.advance_clock(Duration::from_millis(3000));
     app.run_until_parked();
     let wrapped_progress = app.read_entity(&home, |home, _| home.thinking_shimmer_progress);
-    assert!((wrapped_progress - 1.0 / THINKING_SHIMMER_STEPS).abs() < 0.000_001);
+    assert!(wrapped_progress < 0.001 || wrapped_progress == 1.0);
     assert!(app.read_entity(&home, |home, _| home.thinking_shimmer_running));
 
     app.update_entity(&home, |home, cx| home.sync_thinking_shimmer(false, cx));
@@ -2541,6 +2529,41 @@ fn streaming_reply_is_revealed_at_the_reference_cadence_until_it_completes() {
     assert_eq!(window.read(|home, _| streamed_reply_text(home)), reply);
     assert!(window.read(|home, _| home.streaming_reveal.is_none()));
     assert!(window.read(|home, _| !home.streaming_fade.is_active()));
+}
+
+#[test]
+fn failed_stream_retains_the_reply_without_exposing_completed_response_actions() {
+    use crate::agent::AgentEvent as E;
+    for failed in [false, true] {
+        let mut app = TestApp::new();
+        let mut window = open_streaming_reply(&mut app, "A partial **reply");
+        window.update(|home, _, cx| {
+            home.composer.update(cx, |composer, cx| {
+                composer.apply_events_for_capture(
+                    vec![if failed {
+                        E::Failed("Stream failed".into())
+                    } else {
+                        E::Interrupted
+                    }],
+                    cx,
+                );
+            });
+        });
+        window.draw();
+        assert_eq!(
+            window.read(|home, _| streamed_reply_text(home)),
+            "A partial **reply"
+        );
+        let footer = window.read(|home, _| {
+            home.conversation_rows.iter().any(|row| {
+                matches!(
+                    row,
+                    super::timeline::ConversationListRow::CurrentResponseFooter { .. }
+                )
+            })
+        });
+        assert_eq!(footer, !failed);
+    }
 }
 
 #[test]

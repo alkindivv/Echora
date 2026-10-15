@@ -390,6 +390,8 @@ impl ConversationState {
                         .insert(usage.thread_id.clone(), usage);
                 }
                 AgentEvent::AssistantMessageStarted { item_id, phase } => {
+                    self.live_timing
+                        .message_started(&item_id, std::time::Instant::now());
                     self.assistant_message_phases
                         .entry(item_id.clone())
                         .or_insert(phase);
@@ -410,6 +412,8 @@ impl ConversationState {
                     }
                 }
                 AgentEvent::TextDelta { item_id, delta } => {
+                    self.live_timing
+                        .message_started(&item_id, std::time::Instant::now());
                     self.assistant_message.push_str(&delta);
                     if let Some(ConversationActivity::AssistantMessage { text, .. }) =
                         self.activities.iter_mut().rev().find(|activity| {
@@ -1057,6 +1061,7 @@ impl ConversationState {
                     });
                 }
                 AgentEvent::Completed => {
+                    self.live_timing.finish(std::time::Instant::now());
                     self.close_runtime_turn(crate::agent::AgentLocalClosure::TurnCompleted);
                     super::activity::finish_progress_activities(
                         &mut self.activities,
@@ -1075,12 +1080,14 @@ impl ConversationState {
                     continue;
                 }
                 AgentEvent::Interrupted => {
+                    self.live_timing.finish(std::time::Instant::now());
                     self.close_runtime_turn(crate::agent::AgentLocalClosure::Interrupted);
                     super::activity::finish_progress_activities(
                         &mut self.activities,
                         crate::agent::AgentActivityStatus::Interrupted,
                     );
                     remove_unfinished_image_generations(&mut self.activities);
+                    self.refresh_assistant_answer();
                     self.assistant_message_time
                         .get_or_insert_with(current_local_time_label);
                     self.phase = ConversationPhase::Stopped;
@@ -1089,13 +1096,17 @@ impl ConversationState {
                     continue;
                 }
                 AgentEvent::Failed(error) => {
+                    self.live_timing.finish(std::time::Instant::now());
                     self.close_runtime_turn(crate::agent::AgentLocalClosure::Failed);
                     super::activity::finish_progress_activities(
                         &mut self.activities,
                         crate::agent::AgentActivityStatus::Failed,
                     );
                     remove_unfinished_image_generations(&mut self.activities);
-                    self.assistant_message = error.clone();
+                    self.refresh_assistant_answer();
+                    if self.assistant_message.is_empty() {
+                        self.assistant_message = error.clone();
+                    }
                     let already_visible = self.activities.iter().rev().any(|activity| {
                         matches!(
                             activity,
