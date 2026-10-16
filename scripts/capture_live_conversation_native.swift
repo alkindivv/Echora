@@ -7,18 +7,29 @@ func option(_ name: String, _ fallback: String) -> String {
     CommandLine.arguments.first(where: { $0.hasPrefix("--\(name)=") })?
         .dropFirst(name.count + 3).description ?? fallback
 }
+let accessibility = AXIsProcessTrusted()
+let postEvents = CGPreflightPostEventAccess()
+if CommandLine.arguments.contains("--check-permissions") {
+    let data = try JSONSerialization.data(withJSONObject: ["accessibility": accessibility, "postEvents": postEvents, "screenRecordingRequired": false, "appleEventsRequired": false], options: [.sortedKeys])
+    print(String(data: data, encoding: .utf8)!)
+    exit(accessibility && postEvents ? 0 : 2)
+}
+guard accessibility && postEvents else {
+    fputs("Accessibility and input access are missing for the app running this driver. Grant them once in System Settings; this driver never requests a permission prompt.\n", stderr)
+    exit(2)
+}
 let name = option("app", "")
 guard !name.isEmpty else { fatalError("Pass --app= with the dedicated verification app's exact name") }
 let output = URL(fileURLWithPath: option("output", "artifacts/live-native"))
 let capturePath = option("capture", "")
-guard !capturePath.isEmpty else { fatalError("Pass --capture= matching the app's GPUI_CAPTURE_OUTPUT on the internal disk") }
+guard capturePath.hasPrefix("/") else { fatalError("Pass --capture=/absolute/frame.png matching the app's GPUI_CAPTURE_OUTPUT on the internal disk") }
 let capture = URL(fileURLWithPath: capturePath)
 let prompt = option("prompt", "TOOLS_STREAM")
 let interruptAt = Double(option("interrupt", "0")) ?? 0
 let resume = CommandLine.arguments.contains("--resume")
 let duration = Double(option("duration", "25")) ?? 25
 let draftAt = Double(option("draft-at", "2.4")) ?? 2.4
-guard AXIsProcessTrusted(), let app = NSWorkspace.shared.runningApplications.first(where: {
+guard let app = NSWorkspace.shared.runningApplications.first(where: {
     $0.localizedName == name
 }) else { fatalError("Start the named verification app and enable accessibility first") }
 let pid = app.processIdentifier
@@ -54,23 +65,28 @@ func rect(_ element: AXUIElement) -> CGRect {
     return CGRect(origin: origin, size: size)
 }
 func key(_ code: CGKeyCode, _ flags: CGEventFlags = []) {
-    let modifiers = [(CGEventFlags.maskCommand, "command down"), (.maskShift, "shift down")]
-        .filter { flags.contains($0.0) }.map { $0.1 }.joined(separator: ", ")
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    process.arguments = ["-e", "on run argv\n tell application \"System Events\"\n tell process (item 1 of argv) to set frontmost to true\n key code \(code) using {\(modifiers)}\n end tell\nend run", name]
-    try! process.run()
-    process.waitUntilExit()
-    precondition(process.terminationStatus == 0, "Native key input failed")
-    Thread.sleep(forTimeInterval: 0.04)
+    app.activate(options: [.activateAllWindows])
+    Thread.sleep(forTimeInterval: 0.2)
+    for down in [true, false] {
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)!
+        event.flags = flags
+        event.postToPid(pid)
+        Thread.sleep(forTimeInterval: 0.08)
+    }
+    Thread.sleep(forTimeInterval: 0.2)
 }
 func text(_ input: String) {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    process.arguments = ["-e", "on run argv\n tell application \"System Events\"\n tell process (item 1 of argv) to set frontmost to true\n keystroke (item 2 of argv)\n end tell\nend run", name, input]
-    try! process.run()
-    process.waitUntilExit()
-    precondition(process.terminationStatus == 0, "Native text input failed")
+    let pasteboard = NSPasteboard.general
+    let saved = (pasteboard.pasteboardItems ?? []).map { item -> NSPasteboardItem in
+        let copy = NSPasteboardItem()
+        for type in item.types { if let data = item.data(forType: type) { copy.setData(data, forType: type) } }
+        return copy
+    }
+    pasteboard.clearContents()
+    pasteboard.setString(input, forType: .string)
+    key(9, [.maskCommand])
+    pasteboard.clearContents()
+    pasteboard.writeObjects(saved)
     Thread.sleep(forTimeInterval: 0.12)
 }
 func pointer(_ type: CGEventType, _ point: CGPoint) {
@@ -96,9 +112,6 @@ func focusEditor() {
     click(CGPoint(x: r.minX + 20, y: r.minY + 12))
 }
 var timeline: [[String: Any]] = []
-func captureTime() -> Date? {
-    (try? FileManager.default.attributesOfItem(atPath: capture.path)[.modificationDate]) as? Date
-}
 func record(_ label: String, screenshot: Bool = true) {
     let send = button()
     let r = rect(send)
@@ -111,23 +124,29 @@ func record(_ label: String, screenshot: Bool = true) {
             .compactMap { value($0, kAXTitleAttribute) as? String },
     ])
     if screenshot {
-        let previous = captureTime()
+        try? FileManager.default.removeItem(at: capture)
+        let metadata = URL(fileURLWithPath: capture.path + ".render.json")
+        try? FileManager.default.removeItem(at: metadata)
         key(111, [.maskCommand, .maskShift])
-        for _ in 0..<40 {
-            Thread.sleep(forTimeInterval: 0.025)
-            let current = captureTime()
-            if current != previous, current != nil { break }
+        for _ in 0..<200 {
+            if FileManager.default.fileExists(atPath: capture.path) && FileManager.default.fileExists(atPath: metadata.path) { break }
+            Thread.sleep(forTimeInterval: 0.05)
         }
-        let current = captureTime()
-        precondition(current != previous && current != nil, "The verification app did not write a fresh screenshot")
+        let data = try! Data(contentsOf: capture)
+        precondition(NSBitmapImageRep(data: data) != nil, "The verification app did not write a fresh PNG")
         let target = output.appendingPathComponent(label + ".png")
-        if FileManager.default.fileExists(atPath: target.path) { try! FileManager.default.removeItem(at: target) }
-        try! FileManager.default.copyItem(at: capture, to: target)
+        try! data.write(to: target)
+        try! Data(contentsOf: metadata).write(to: output.appendingPathComponent(label + ".png.render.json"))
     }
     try! JSONSerialization.data(withJSONObject: timeline, options: [.prettyPrinted, .sortedKeys])
         .write(to: output.appendingPathComponent("timeline.json"))
 }
 
+if option("scenario", "") == "capture" {
+    record("00-capture")
+    print("Verified app-owned capture without Screen Recording or Apple Events")
+    exit(0)
+}
 app.activate(options: [.activateAllWindows])
 Thread.sleep(forTimeInterval: 0.4)
 focusEditor()

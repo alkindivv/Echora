@@ -7,10 +7,26 @@ func option(_ name: String, _ fallback: String = "") -> String {
     CommandLine.arguments.first(where: { $0.hasPrefix("--\(name)=") })?.dropFirst(name.count + 3).description ?? fallback
 }
 let name = option("app")
+let accessibility = AXIsProcessTrusted()
+let postEvents = CGPreflightPostEventAccess()
+if CommandLine.arguments.contains("--check-permissions") {
+    let data = try JSONSerialization.data(withJSONObject: ["accessibility": accessibility, "postEvents": postEvents, "screenRecordingRequired": false, "appleEventsRequired": false], options: [.sortedKeys])
+    print(String(data: data, encoding: .utf8)!)
+    exit(accessibility && postEvents ? 0 : 2)
+}
+guard accessibility && postEvents else {
+    fputs("Accessibility and input access are missing for the app running this driver. Grant them once in System Settings; this driver never requests a permission prompt.\n", stderr)
+    exit(2)
+}
 let output = URL(fileURLWithPath: option("output", "artifacts/issues-23-24/native"))
-let capture = URL(fileURLWithPath: option("capture"))
+let capturePath = option("capture")
+guard capturePath.hasPrefix("/") else {
+    fputs("Pass --capture=/absolute/frame.png matching the verification app's GPUI_CAPTURE_OUTPUT on the internal disk.\n", stderr)
+    exit(2)
+}
+let capture = URL(fileURLWithPath: capturePath)
 let inventory = NSWorkspace.shared.runningApplications.map { ["name": $0.localizedName ?? "", "pid": String($0.processIdentifier)] }
-guard AXIsProcessTrusted(), !name.isEmpty, let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == name }) else { fatalError("Named verification app or Accessibility access missing") }
+guard !name.isEmpty, let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == name }) else { fatalError("Named verification app missing") }
 try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
 try JSONSerialization.data(withJSONObject: inventory, options: [.prettyPrinted]).write(to: output.appendingPathComponent("applications.json"))
 let root = AXUIElementCreateApplication(app.processIdentifier)
@@ -79,18 +95,30 @@ func click(_ e: AXUIElement, edge: Int = 0) {
 var report: [[String: Any]] = []
 func record(_ label: String) {
     let target = output.appendingPathComponent(label + ".png")
-    let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
-    let window = windows.first { ($0[kCGWindowOwnerPID as String] as? Int32) == app.processIdentifier && ($0[kCGWindowLayer as String] as? Int) == 0 }!
-    let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-    process.arguments = ["-x", "-o", "-l", String(window[kCGWindowNumber as String] as! Int), target.path]
-    try! process.run(); process.waitUntilExit()
-    precondition(process.terminationStatus == 0 && NSBitmapImageRep(data: try! Data(contentsOf: target)) != nil, "Native window capture failed")
+    // The app captures its own renderer, which needs no Screen Recording grant.
+    try? FileManager.default.removeItem(at: capture)
+    let metadata = URL(fileURLWithPath: capture.path + ".render.json")
+    try? FileManager.default.removeItem(at: metadata)
+    key(111, command: true, shift: true)
+    for _ in 0..<200 {
+        if FileManager.default.fileExists(atPath: capture.path) && FileManager.default.fileExists(atPath: metadata.path) { break }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    let data = try! Data(contentsOf: capture)
+    precondition(NSBitmapImageRep(data: data) != nil, "App renderer did not write a fresh PNG")
+    try! data.write(to: target)
+    try! Data(contentsOf: metadata).write(to: output.appendingPathComponent(label + ".png.render.json"))
     let controls = elements().map { e -> [String: Any] in
         let r = rect(e)
         return ["role": value(e, kAXRoleAttribute) as? String ?? "", "title":title(e), "id":value(e, kAXIdentifierAttribute) as? String ?? "", "value":value(e, kAXValueAttribute) as? String ?? "", "rect":[r.minX,r.minY,r.width,r.height]]
     }
     report.append(["name":label,"controls":controls])
     try! JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("report.json"))
+}
+if option("scenario") == "capture" {
+    record("00-capture")
+    print("Verified app-owned capture without Screen Recording or Apple Events")
+    exit(0)
 }
 func waitForBranches() {
     for _ in 0..<300 {

@@ -244,13 +244,26 @@ Computer Use 先枚举应用，连接打包脚本打印的那个名字，读取�
 
 每个打包产物的名称与标识都以本工作树 slug 结尾，资源随 bundle 一起分发，因此 LaunchServices 不可能换成其他目录里的构建。采集脚本通过 `scripts/gpui_capture_binary.sh` 解析该 bundle，它每次调用都会先重新打包当前工作树；`GPUI_CAPTURE_SKIP_BUILD=1` 沿用已有产物，`GPUI_CAPTURE_BUNDLE` 指定一个原样使用的 bundle。`--print-diagnostics` 会打印可执行文件、bundle 身份以及每个资源候选路径与判定，验收运行可以自证在驱动哪一个构建。需要让 bundle 从别处读取资源时，用 `GPUI_ASSETS_DIR` 硬覆盖搜索。若所有候选都不可用，应用继续运行、向 stderr 告警，并在窗口顶部显示写明已尝试路径的红色条，截图不可能再悄悄呈现无图标的界面。`scripts/launch_project_hover_instance.sh` 使用同一套打包身份，会在本工作树的悬停验收实例已在运行时拒绝重复启动，并打印二进制路径、pid 与日志。
 
-Computer Use 只能驱动 macOS 视作用户应用的 bundle，而且驱动过程不能触发隐私弹窗。`scripts/launch_verify_instance.sh` 会打包、把 bundle 复制到 `~/Applications`，再用 `launchctl submit` 加上本会话的 `PATH` 与真实 `HOME` 启动：GUI 进程因此不会打开本仓库所在外置卷上的任何文件，启动也不经过 LaunchServices，它的 `codex app-server --stdio` 子进程读到的正是 ChatGPT 应用同一份 `~/.codex` 项目、会话与登录态。脚本转发 `GPUI_UI_PREFERENCES_PATH`、`GPUI_ASSETS_DIR`、`GPUI_CAPTURE_OUTPUT` 与 `CODEX_HOME`；验证任何会写入 Codex 配置或删除数据的操作（钩子信任、实验性功能、记忆开关、删除记忆）前，先把 `CODEX_HOME` 指向 `~/.codex` 的副本（例如 `cp -Rc ~/.codex/. "$HOME/Library/Application Support/echora-verify/codex-home/"`）。它的 `--stop` 只停止从本工作树副本运行的实例。打成 agent 应用（`GPUI_CAPTURE_AGENT_APP=1`）虽然不显示 Dock 图标，却也会让 Computer Use 的应用清单看不到它。对外置卷上的 bundle 使用 `open -n` 会弹出「想要访问可移除宗卷上的文件」，`launchctl submit` 与会话内的子进程都不会，因此采集脚本与 ChatGPT 参考启动器都不使用 `open -n`。
+Computer Use 只能驱动 macOS 视作用户应用的 bundle，而且驱动过程不能触发隐私弹窗。`scripts/launch_verify_instance.sh` 会打包、把 bundle 复制到 `~/Applications`，再用 `launchctl submit` 加上本会话的 `PATH` 与真实 `HOME` 启动；运行目录与默认资源路径均在 bundle 内，默认截图写入 `~/Library/Application Support/Echora/verification/<bundle-name>/frame.png`，路径会打印到终端。启动不经过 LaunchServices，应用不必为了读取构建资源访问外置卷。项目本身仍在外置卷时，项目文件访问仍受 macOS 授权约束。它的 `codex app-server --stdio` 子进程读到 ChatGPT 应用同一份 `~/.codex` 项目、会话与登录态。脚本转发 `GPUI_UI_PREFERENCES_PATH`、`GPUI_ASSETS_DIR`、`GPUI_CAPTURE_OUTPUT` 与 `CODEX_HOME`；验证任何会写入 Codex 配置或删除数据的操作（钩子信任、实验性功能、记忆开关、删除记忆）前，先把 `CODEX_HOME` 指向 `~/.codex` 的副本（例如 `cp -Rc ~/.codex/. "$HOME/Library/Application Support/echora-verify/codex-home/"`）。它的 `--stop` 只停止从本工作树副本运行的实例。打成 agent 应用（`GPUI_CAPTURE_AGENT_APP=1`）虽然不显示 Dock 图标，却也会让 Computer Use 的应用清单看不到它。对外置卷上的 bundle 使用 `open -n` 会弹出「想要访问可移除宗卷上的文件」，因此采集脚本与 ChatGPT 参考启动器都不使用 `open -n`。
+
+原生驱动先做无弹窗权限预检，再复用当前启动应用已有的辅助功能与输入权限：
+
+```bash
+scripts/run_native_verification.sh workspace --check-permissions
+scripts/run_native_verification.sh live --check-permissions
+scripts/run_native_verification.sh workspace \
+  --app='GPUI Capture (SLUG)' \
+  --capture='/absolute/internal/frame.png' \
+  --output=artifacts/workspace-controls/native
+```
+
+入口把 Swift 驱动缓存到 `~/Library/Caches/Echora/native-verification/`，作为调用应用的直接子进程运行，不经 LaunchServices 或 `sudo`。两个驱动用 CoreGraphics 发送输入，截图直接调用验收应用自己的渲染器，保存原始 PNG 与 `.render.json`，不调用系统录屏或 `System Events`，因此不要求这两项额外授权。渲染截图只覆盖 GPUI 内容，不含系统弹窗、窗口外框和原生合成效果；验收这些内容时使用已有授权的 Computer Use 截图。`--capture` 必须与启动器打印的路径一致。首次辅助功能授权仍需在系统设置中给实际启动应用（例如 Codex/ChatGPT 或终端）授予；缺失时预检返回非零并报告，不请求弹窗。其他应用的 Computer Use 截图仍受其录屏权限约束；系统撤销授权、变更签名身份或要求重新确认时，不能承诺永久零点击。
 
 真实实时轮次采集：启动时传入 `--capture-live-turn="$PWD/artifacts/live.png"`，再在验收实例输入提示词。完成后保存尚未重新加载历史的实时画面，以及包含线程身份、活动数据的 `.json` 侧文件，然后退出。中断、失败或超过五分钟返回失败。
 
 确定性的本地流式校验：`python3 scripts/live_conversation_fixture.py --init-home /path/to/isolated-codex-home` 配置本地 Responses 提供方；运行 `python3 scripts/live_conversation_fixture.py` 监听 9474 端口，把验收实例的 `CODEX_HOME` 指向该隔离目录，再发送 `TOOLS_STREAM`、`STREAM` 或 `FAIL_STREAM`。`CHATGPT_CDP_HTTP=http://127.0.0.1:9473 node scripts/cdp_capture_live_conversation.mjs --output=artifacts/live-reference --theme=dark` 记录专用参考实例的输入框与真实轮次，包括悬停和按下状态；`--draft-at=2400 --interrupt=9000` 还会检查草稿与中断。
 
-原生输入与截图采集：启动专用实例时将 `GPUI_CAPTURE_OUTPUT` 指向内置磁盘路径，然后运行 `swift scripts/capture_live_conversation_native.swift --app='EXACT VERIFICATION APP NAME' --capture='/same/internal/path.png' --output=artifacts/live-native`。脚本通过辅助功能与原生输入采集实时轮次和按钮状态。`--prompt=PLAIN_STREAM` 检查纯文本，`--prompt=FAIL_AFTER_STREAM` 检查部分输出后的失败，`--interrupt=8 --resume` 检查停止与继续。原生脚本的时间选项以秒为单位；`--duration=25` 控制采集时长，`--draft-at=0` 跳过插入草稿。
+原生输入与截图采集：使用启动专用实例时打印的内置磁盘 `GPUI_CAPTURE_OUTPUT` 路径，然后运行 `scripts/run_native_verification.sh live --app='EXACT VERIFICATION APP NAME' --capture='/same/internal/path.png' --output=artifacts/live-native`。脚本通过辅助功能与原生输入采集实时轮次和按钮状态。`--prompt=PLAIN_STREAM` 检查纯文本，`--prompt=FAIL_AFTER_STREAM` 检查部分输出后的失败，`--interrupt=8 --resume` 检查停止与继续。原生脚本的时间选项以秒为单位；`--duration=25` 控制采集时长，`--draft-at=0` 跳过插入草稿。
 
 自动恢复会话截图可追加 `--resume-thread=THREAD_ID --screenshot="$PWD/artifacts/resumed-thread.png"`。ID 接受原始 UUID 或 `local:<uuid>`。可选 `--resume-scroll-from-bottom=3200` 指定距底部的滚动距离，省略则停在底部。应用等待历史、侧栏、模型目录与三个稳定绘制帧后截图退出，失败或超时返回非零状态。请选择未被其他活动写入进程占用的线程。
 
@@ -326,7 +339,7 @@ node scripts/cdp_pin_reference_layout.mjs --layout=legacy --wait=60
 | 真实线程双主题 | `python3 scripts/capture_resume_reference.py --endpoint "$CHATGPT_CDP_HTTP" --manifest /path/to/manifest.json`；`python3 scripts/capture_resume_gpui.py --manifest /path/to/manifest.json --output artifacts/resume-alignment/actual` |
 | 终端 / 文件 | `node scripts/cdp_capture_terminal.mjs artifacts/terminal`；`node scripts/cdp_capture_file_panel.mjs artifacts/file-panel` |
 | 项目与模型控件 | `CHATGPT_CDP_HTTP="$CHATGPT_CDP_HTTP" node scripts/verify_project_composer_reference.mjs --output=artifacts/project-composer/reference` 驱动专用旧版参考实例，检查项目搜索、创建、取消、不在项目中工作、模型选择、推理强度与重置，并保存截图和几何数据。`cargo test project` 与 `cargo test model_picker` 验证原生指针、键盘、焦点、草稿目录同步及菜单状态。 |
-| 分支与运行位置 | `cargo test --features screenshot workspace` 覆盖真实 Git 操作、首次发送创建工作树、错误、键盘导航与面板目录同步。`CHATGPT_CDP_HTTP=http://127.0.0.1:PORT node scripts/verify_workspace_controls_reference.mjs` 在专用旧版参考实例采集两种主题；`swift scripts/verify_workspace_controls_native.swift --app='GPUI Capture (SLUG)' --output=artifacts/workspace-controls/native` 通过可访问性树驱动打包后的专用原生实例，记录对应菜单状态。使用包含 `main` 和 `topic/long-acceptance-branch-000` 至 `149` 的隔离项目测试仓库时，添加 `--repository=/absolute/fixture` 可验证实际分支切换、创建及首次发送的工作目录。 |
+| 分支与运行位置 | `cargo test --features screenshot workspace` 覆盖真实 Git 操作、首次发送创建工作树、错误、键盘导航与面板目录同步。`CHATGPT_CDP_HTTP=http://127.0.0.1:PORT node scripts/verify_workspace_controls_reference.mjs` 在专用旧版参考实例采集两种主题；`scripts/run_native_verification.sh workspace --app='GPUI Capture (SLUG)' --capture=/absolute/internal/frame.png --output=artifacts/workspace-controls/native` 通过可访问性树驱动打包后的专用原生实例，记录对应菜单状态。使用包含 `main` 和 `topic/long-acceptance-branch-000` 至 `149` 的隔离项目测试仓库时，添加 `--repository=/absolute/fixture` 可验证实际分支切换、创建及首次发送的工作目录。 |
 | 审查 / 侧边聊天 | `node scripts/cdp_capture_review.mjs artifacts/review-reference`；`node scripts/cdp_capture_side_chat.mjs artifacts/side-chat reference` |
 | 审查弹层 | `node scripts/cdp_capture_review_menus.mjs --output=artifacts/review-menus` 采集比较范围、查看选项与分支选择三个弹层，双主题并附带计算样式；`python3 scripts/compare_review_menus.py --reference DIR --gpui DIR --output DIR --scale 2` 逐像素比对两侧截图，输出裁切图、差异图与报告 |
 | 账户菜单、退出登录 | `node scripts/cdp_capture_account.mjs --output artifacts/account-phase/chatgpt-reference --theme=light`；`scripts/capture_account_gpui.sh`；`python3 scripts/compare_account_phase.py` |

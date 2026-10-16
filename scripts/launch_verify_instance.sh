@@ -32,6 +32,7 @@
 #                               of the same bundle their own file, because they
 #                               would otherwise overwrite one preferences file
 #   GPUI_CAPTURE_OUTPUT         live capture destination for Cmd+Shift+F12
+#                               (default: per-worktree frame on the internal disk)
 #   GPUI_ASSETS_DIR             forwarded to the app
 #   CODEX_HOME                  forwarded to the app, and so to the
 #                               `codex app-server` it spawns: point it at a
@@ -108,6 +109,10 @@ fi
 log_dir="$HOME/Library/Logs/gpui-capture"
 log="$log_dir/verify-instance.log"
 mkdir -p "$log_dir"
+state_dir="$HOME/Library/Application Support/Echora/verification/$display"
+mkdir -p "$state_dir"
+export GPUI_CAPTURE_OUTPUT="${GPUI_CAPTURE_OUTPUT:-$state_dir/frame.png}"
+export GPUI_ASSETS_DIR="${GPUI_ASSETS_DIR:-$destination/Contents/Resources/assets}"
 
 # Prove which build this is, and that the copy resolves its own assets.
 "$binary" --print-diagnostics
@@ -128,12 +133,13 @@ done
 # `launchctl submit` keeps the process alive after this shell exits, which
 # Computer Use needs, and it never routes the launch through LaunchServices.
 launchctl submit -l "$label" -- /bin/sh -c \
-  "export HOME='$HOME'; export PATH='$PATH'$forwarded; exec '$binary'$arguments >>'$log' 2>&1"
+  "export HOME='$HOME'; export PATH='$PATH'$forwarded; cd '$destination/Contents/MacOS'; exec '$binary'$arguments >>'$log' 2>&1"
 
 sleep 3
 echo "launched $label from $destination"
 echo "binary: $binary"
 echo "log: $log"
+echo "capture: $GPUI_CAPTURE_OUTPUT"
 pids="$(instance_pids)"
 if [ -n "$pids" ]; then
   echo "pid:" $pids
