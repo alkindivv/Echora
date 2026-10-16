@@ -9,7 +9,7 @@ use std::{
 
 use gpui::{
     ClipboardItem, Div, FontStyle, FontWeight, Rgba, SharedString, StrikethroughStyle, StyledText,
-    TextAlign, TextRun, UnderlineStyle, div, prelude::*, px,
+    TextAlign, TextRun, UnderlineStyle, Window, div, prelude::*, px,
 };
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag};
 use two_face::{
@@ -30,6 +30,7 @@ use crate::{
 mod fade;
 pub(crate) mod find;
 mod highlight;
+mod link_preview;
 use highlight::highlighted_code_spans;
 mod preview;
 mod repair;
@@ -617,6 +618,7 @@ struct MarkdownPalette {
     table_border_subtle: Rgba,
     table_header_surface: Rgba,
     rule: Rgba,
+    link_preview: link_preview::LinkPreviewPalette,
 }
 
 /// `-webkit-line-clamp` over a root block sequence: the blocks after `block`
@@ -675,6 +677,7 @@ impl MarkdownRenderStyle {
                 table_border_subtle: theme.markdown_table_border_subtle,
                 table_header_surface: theme.markdown_table_header_surface,
                 rule: theme.markdown_rule,
+                link_preview: link_preview::LinkPreviewPalette::new(theme),
             },
         }
     }
@@ -1677,9 +1680,8 @@ fn render_inline_boxes(
             && file_reference.is_none()
         {
             match plain_text_of(link_content) {
-                // Explicit runs ignore the text style the element inherits, so
-                // a link drawn from them never showed its hover underline. Plain
-                // text takes the element's own style (weight, colour, underline).
+                // Plain text takes the element's own style (weight, colour);
+                // formatted content needs explicit runs.
                 Some(plain) => StyledText::new(plain),
                 None => render_styled_text_with_state(
                     link_content,
@@ -1739,33 +1741,72 @@ fn render_inline_boxes(
                     .child(code),
             )
         } else {
+            let is_link = fragment.link_destination.is_some();
+            let layout = text.layout().clone();
             element.child(
                 div()
+                    .relative()
                     .min_w(px(0.0))
                     .when(has_icon, |e| e.flex_1())
-                    .child(text),
+                    .child(text)
+                    // The label alone takes the hover underline: the icon
+                    // before it is an atomic inline box in the reference.
+                    .when(is_link, |label| {
+                        label.child(link_preview::dashed_underline(
+                            layout,
+                            color,
+                            MARKDOWN_LINK_GROUP.into(),
+                        ))
+                    }),
             )
         };
         if let Some(destination) = fragment.link_destination {
-            let link_id = markdown_element_id(
-                "markdown-link",
-                &(inline_identity, index, destination.as_str()),
-            );
+            let link_key = markdown_hash(&(inline_identity, index, destination.as_str()));
+            let link_id: SharedString = format!("markdown-link-{link_key:016x}").into();
             let file_reference = markdown_file_reference_path(&destination).map(str::to_owned);
+            let previews = file_reference.is_none() && link_preview::previews(&destination);
+            // The card hangs from the link's text box, which sits centred in
+            // the line box: `font-size` 14px draws a 17px box.
+            let line_box = if expands_line_box {
+                line_height + style.layout.inline_code_flow_height - style.layout.base_line_height
+            } else {
+                line_height
+            };
+            let text_bottom = (line_box + font_size * 17.0 / 14.0) / 2.0;
+            let card = previews
+                .then(|| {
+                    link_preview::card(
+                        link_key,
+                        &destination,
+                        github_reference,
+                        text_bottom,
+                        style.palette.link_preview,
+                    )
+                })
+                .flatten();
+            let hover_destination = destination.clone();
             element
                 .id(link_id)
+                .relative()
+                .group(MARKDOWN_LINK_GROUP)
+                .debug_selector(|| "MARKDOWN_LINK".to_owned())
                 // Every interactive element of the reference reports
                 // `cursor: default`, links included.
                 .cursor_default()
-                .hover(|mut element| {
-                    // `text-decoration-thickness: 0.5px`, in the link's own colour.
-                    element.text_style().underline = Some(UnderlineStyle {
-                        thickness: px(0.5),
-                        ..Default::default()
-                    });
-                    element
+                .when(previews, |element| {
+                    element.on_hover(move |hovered, window, cx| {
+                        link_preview::link_hovered(
+                            link_key,
+                            &hover_destination,
+                            *hovered,
+                            window,
+                            cx,
+                        );
+                    })
                 })
+                .children(card)
                 .on_click(move |_, window, cx| {
+                    link_preview::dismiss(window);
                     if let Some(file_reference) = &file_reference {
                         let line = destination
                             .rsplit_once(":")
@@ -1782,15 +1823,8 @@ fn render_inline_boxes(
                             }),
                             cx,
                         );
-                    } else if super::browser::opens_in_browser(&destination) {
-                        window.dispatch_action(
-                            Box::new(super::browser::OpenLinkInBrowser {
-                                url: destination.clone(),
-                            }),
-                            cx,
-                        );
                     } else {
-                        cx.open_url(&destination);
+                        open_web_link(&destination, window, cx);
                     }
                 })
                 .into_any_element()
@@ -1835,6 +1869,25 @@ fn render_inline_boxes(
             )
         },
     )
+}
+
+/// Hover group shared by every Markdown link: links never nest, so the
+/// innermost group is always the link's own.
+const MARKDOWN_LINK_GROUP: &str = "markdown-link";
+
+/// Opens a non-file link where the reference does: the in-app browser for web
+/// pages it can show, the system otherwise.
+fn open_web_link(destination: &str, window: &mut Window, cx: &mut gpui::App) {
+    if super::browser::opens_in_browser(destination) {
+        window.dispatch_action(
+            Box::new(super::browser::OpenLinkInBrowser {
+                url: destination.to_owned(),
+            }),
+            cx,
+        );
+    } else {
+        cx.open_url(destination);
+    }
 }
 
 /// A zero-width text line that gives an inline box its taller line box. An
@@ -3478,7 +3531,7 @@ fn main() {}
     }
 
     #[test]
-    fn only_plain_link_text_can_take_the_elements_hover_underline() {
+    fn only_plain_link_text_takes_the_elements_text_style() {
         assert_eq!(
             plain_text_of(&[MarkdownInline::Text("IEEE 官方模板选择器".into())]),
             Some("IEEE 官方模板选择器".to_owned())

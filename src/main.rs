@@ -10,6 +10,7 @@ mod features;
 mod git_review;
 mod hooks;
 mod i18n;
+mod link_preview;
 mod mcp;
 mod media;
 mod plugins;
@@ -155,10 +156,23 @@ fn save_screenshot(window: &gpui::Window, path: &str) -> anyhow::Result<()> {
 #[cfg(feature = "screenshot")]
 fn capture_frame(window: &mut gpui::Window, path: String, frames: usize) {
     window.on_next_frame(move |window, cx| {
+        // The capture shortcut switches GPUI to keyboard modality, which
+        // suppresses hover and can close the very card being captured.
+        // Restore the stationary pointer before painting the capture frames.
+        if frames == 3 {
+            window.dispatch_event(
+                gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                    position: window.mouse_position(),
+                    pressed_button: None,
+                    modifiers: gpui::Modifiers::default(),
+                }),
+                cx,
+            );
+        }
         if frames>1 {window.refresh();capture_frame(window,path,frames-1);} else {
             match save_screenshot(window,&path) {
                 Ok(())=>{
-                    let metadata=serde_json::json!({"viewportWidth":f32::from(window.viewport_size().width),"viewportHeight":f32::from(window.viewport_size().height),"dpr":window.scale_factor(),"source":"GPUI render_to_image; no resizing or alignment","keyContexts":format!("{:?}",window.context_stack()),"approvalActionAvailable":window.is_action_available(&components::approval::ApprovalShortcut("escape"),cx),"executable":std::env::current_exe().map(|p|p.display().to_string()).unwrap_or_default(),"bundleIdentifier":bundle_plist_value("CFBundleIdentifier").unwrap_or_default(),"assetsBase":assets::status().base.clone().map(|p|p.display().to_string()).unwrap_or_default(),"assetsOrigin":assets::status().origin.map(|o|o.label()).unwrap_or_default()});
+                    let metadata=serde_json::json!({"viewportWidth":f32::from(window.viewport_size().width),"viewportHeight":f32::from(window.viewport_size().height),"dpr":window.scale_factor(),"source":"GPUI render_to_image; no resizing or alignment","mousePosition":[f32::from(window.mouse_position().x),f32::from(window.mouse_position().y)],"keyContexts":format!("{:?}",window.context_stack()),"approvalActionAvailable":window.is_action_available(&components::approval::ApprovalShortcut("escape"),cx),"executable":std::env::current_exe().map(|p|p.display().to_string()).unwrap_or_default(),"bundleIdentifier":bundle_plist_value("CFBundleIdentifier").unwrap_or_default(),"assetsBase":assets::status().base.clone().map(|p|p.display().to_string()).unwrap_or_default(),"assetsOrigin":assets::status().origin.map(|o|o.label()).unwrap_or_default()});
                     let _=std::fs::write(format!("{path}.render.json"),serde_json::to_vec_pretty(&metadata).unwrap());
                     println!("capture-frame: {path}");
                 }
@@ -436,6 +450,16 @@ fn capture_pointer() -> Option<gpui::Point<gpui::Pixels>> {
         gpui::px(x.trim().parse().ok()?),
         gpui::px(y.trim().parse().ok()?),
     ))
+}
+
+/// `--pointer-settle-ms=N` keeps a resumed-thread capture waiting that long
+/// after the pointer arrives, for hover states behind a delay (the 0.7 s link
+/// preview card and the page metadata it loads).
+#[cfg(feature = "screenshot")]
+fn capture_pointer_settle() -> Option<Duration> {
+    std::env::args()
+        .find_map(|arg| arg.strip_prefix("--pointer-settle-ms=")?.parse().ok())
+        .map(Duration::from_millis)
 }
 
 #[cfg(feature = "screenshot")]
@@ -882,6 +906,10 @@ fn schedule_resumed_thread_screenshot(
                         }),
                         cx,
                     );
+                }
+                let mut options = options;
+                if let Some(settle) = capture_pointer_settle() {
+                    options.settle_until = Some(Instant::now() + settle);
                 }
                 window.refresh();
                 schedule_resumed_thread_screenshot(

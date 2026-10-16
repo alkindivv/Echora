@@ -81,6 +81,12 @@ pub struct Theme {
     /// it, unlike `markdown_link` and `markdown_file_link`, which other
     /// surfaces still use.
     pub markdown_accent: Rgba,
+    /// Web link hover card, measured from ChatGPT 26.1013 over CDP: the opaque
+    /// `bg-surface-elevated-secondary`, its two `ring-[0.5px] ring-border`
+    /// rings, and the `border-subtle` rules around the page image.
+    pub link_preview_surface: Rgba,
+    pub link_preview_ring: Rgba,
+    pub link_preview_divider: Rgba,
     pub markdown_inline_code_text: Rgba,
     pub markdown_inline_code_surface: Rgba,
     pub markdown_code_surface: Rgba,
@@ -240,6 +246,9 @@ impl Theme {
                 markdown_file_link: rgba(0x2858a4ff),
                 // CDP, ChatGPT 26.1007: color(srgb 0.180392 0.511373 0.824314).
                 markdown_accent: rgba(0x2e82d2ff),
+                link_preview_surface: rgba(0xffffffff),
+                link_preview_ring: rgba(0x1a1c1f14),
+                link_preview_divider: rgba(0x1a1c1f0c),
                 // Values below were resolved from the live ChatGPT desktop
                 // app over CDP. Keeping them semantic prevents theme colors
                 // from changing the Markdown node geometry.
@@ -359,6 +368,9 @@ impl Theme {
                 markdown_file_link: rgba(0x5685d1ff),
                 // CDP, ChatGPT 26.1007: color(srgb 0.585882 0.786667 0.974902).
                 markdown_accent: rgba(0x95c9f9ff),
+                link_preview_surface: rgba(0x2d2d2dff),
+                link_preview_ring: rgba(0xffffff15),
+                link_preview_divider: rgba(0xffffff0b),
                 markdown_inline_code_text: rgba(0xffffffff),
                 markdown_inline_code_surface: rgba(0xffffff1b),
                 markdown_code_surface: rgba(0xffffff0d),
