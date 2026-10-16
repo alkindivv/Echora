@@ -118,7 +118,7 @@ for argument in "$@"; do
 done
 
 forwarded=""
-for name in GPUI_UI_PREFERENCES_PATH GPUI_ASSETS_DIR GPUI_CAPTURE_OUTPUT CODEX_HOME; do
+for name in GPUI_UI_PREFERENCES_PATH GPUI_ASSETS_DIR GPUI_CAPTURE_OUTPUT CODEX_HOME DEVELOPER_DIR; do
   value="$(eval "printf '%s' \"\${$name:-}\"")"
   [ -n "$value" ] || continue
   forwarded="$forwarded

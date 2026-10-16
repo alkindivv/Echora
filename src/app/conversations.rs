@@ -69,6 +69,50 @@ impl ChatApp {
     pub(super) fn wire_project_selection(composer: &Entity<ComposerView>, cx: &mut Context<Self>) {
         cx.subscribe(
             composer,
+            |this, _, _: &crate::components::composer::OpenWorkspaceGitSettings, cx| {
+                this.open_settings_page("git-settings", cx);
+            },
+        )
+        .detach();
+        cx.subscribe(
+            composer,
+            |this, composer, event: &crate::components::composer::DraftWorkspaceChanged, cx| {
+                let key = this
+                    .conversation_hosts
+                    .iter()
+                    .find_map(|(key, host)| (host.composer == composer).then(|| key.clone()));
+                let Some(key) = key else {
+                    return;
+                };
+                let Some(host) = this.conversation_hosts.get_mut(&key) else {
+                    return;
+                };
+                host.cwd = event.0.clone();
+                if let Some(panel) = this.file_panels.get(&key) {
+                    panel.update(cx, |panel, cx| {
+                        panel.set_workspace_root(event.0.clone(), cx)
+                    });
+                }
+                if let Some(panel) = this.terminal_panels.get(&key) {
+                    panel.update(cx, |panel, cx| {
+                        panel.set_workspace_root(event.0.clone(), cx)
+                    });
+                }
+                if let Some(panel) = this.review_panels.get(&key) {
+                    panel.update(cx, |panel, cx| {
+                        panel.set_workspace_root(event.0.clone(), cx);
+                    });
+                }
+                this.workspace_store.invalidate_branch_lookups();
+                if key == this.active_conversation {
+                    this.update_chat_search_roots(cx);
+                }
+                cx.notify();
+            },
+        )
+        .detach();
+        cx.subscribe(
+            composer,
             |this, composer, event: &crate::components::composer::DraftProjectSelected, cx| {
                 this.select_draft_project(&composer, event.0.clone(), cx);
             },

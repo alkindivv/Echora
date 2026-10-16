@@ -99,6 +99,8 @@ impl SettingsView {
                             },
                         };
                         this.mode = mode;
+                        this.branch_prefix_input
+                            .update(cx, |input, cx| input.set_mode(mode, cx));
                         this.appearance_theme = index;
                         cx.emit(ChangeTheme(mode));
                         cx.notify();

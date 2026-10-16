@@ -122,6 +122,10 @@ if [ -n "$codex_home" ]; then
 fi
 
 wire_export=""
+developer_export=""
+if [ -n "${DEVELOPER_DIR:-}" ]; then
+  developer_export="export DEVELOPER_DIR='$DEVELOPER_DIR';"
+fi
 if [ -n "$wire_log_dir" ]; then
   # The app spawns `codex` from CODEX_CLI_PATH. A launchd job cannot read this
   # repository's external volume, so the shim and its helper run from a copy.
@@ -140,7 +144,7 @@ mkdir -p "$log_dir"
 log="$log_dir/reference-instance-$port.log"
 
 launchctl submit -l "$label" -- /bin/sh -c \
-  "export HOME='$HOME'; export CODEX_ELECTRON_USER_DATA_PATH='$user_data'; $codex_home_export $wire_export exec '$binary' --user-data-dir='$user_data' --remote-debugging-port=$port $extra_args >>'$log' 2>&1"
+  "export HOME='$HOME'; export PATH='$PATH'; export CODEX_ELECTRON_USER_DATA_PATH='$user_data'; $developer_export $codex_home_export $wire_export exec '$binary' --user-data-dir='$user_data' --remote-debugging-port=$port $extra_args >>'$log' 2>&1"
 
 endpoint_ready=""
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do

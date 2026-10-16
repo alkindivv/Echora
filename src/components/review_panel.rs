@@ -397,6 +397,7 @@ impl ReviewPanel {
 
     pub fn set_workspace_root(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
         if self.cwd == cwd {
+            self.refresh(cx);
             return;
         }
         self.cwd = cwd;

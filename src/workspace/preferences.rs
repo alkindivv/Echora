@@ -53,6 +53,8 @@ pub struct UiPreferences {
     /// Where `/review` runs, as the reference's Git setting "Review delivery".
     #[serde(default)]
     pub review_delivery: ReviewDelivery,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_prefix: Option<String>,
     /// Custom sidebar sections in the order shown. The sections and their
     /// chats are app-server state; their order, like the reference's
     /// `sectionOrder`, is kept locally. New sections are appended.

@@ -98,6 +98,11 @@ impl ComposerView {
         inverted: bool,
         cx: &mut Context<Self>,
     ) {
+        if (!raw_prompt.trim().is_empty() || !self.prompt_context.files.is_empty())
+            && self.prepare_worktree_send(&raw_prompt, inverted, cx)
+        {
+            return;
+        }
         // `!command` runs in the thread's shell instead of being sent.
         if !inverted
             && !self.side_chat

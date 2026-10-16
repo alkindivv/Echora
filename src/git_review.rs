@@ -5,6 +5,7 @@
 
 mod comments;
 pub(crate) mod process;
+pub mod workspace;
 pub use comments::{ReviewComment, comments_prompt};
 
 use std::{

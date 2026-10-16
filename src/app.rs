@@ -286,10 +286,16 @@ impl ChatApp {
         let initial_cwd = crate::components::composer::projectless_cwd();
         let follow_up_mode = workspace_store.snapshot().preferences.follow_up_mode;
         let review_delivery = workspace_store.snapshot().preferences.review_delivery;
+        let branch_prefix = workspace_store
+            .snapshot()
+            .preferences
+            .branch_prefix
+            .unwrap_or_else(|| "codex/".into());
         initial_composer.update(cx, |composer, cx| {
             composer.set_workspace_context(initial_cwd.clone(), None, None, cx);
             composer.set_follow_up_mode(follow_up_mode, cx);
             composer.set_review_delivery(review_delivery, cx);
+            composer.set_branch_prefix(branch_prefix.clone());
         });
         Self::wire_code_review(&initial_composer, cx);
         Self::wire_project_selection(&initial_composer, cx);
@@ -476,6 +482,21 @@ impl ChatApp {
         settings.update(cx, |settings, cx| {
             settings.set_review_delivery(workspace_store.snapshot().preferences.review_delivery, cx)
         });
+        settings.update(cx, |settings, cx| {
+            settings.set_branch_prefix(&branch_prefix, cx)
+        });
+        cx.subscribe(
+            &settings,
+            |this, _, event: &crate::settings::ChangeBranchPrefix, cx| {
+                this.workspace_store.set_branch_prefix(event.0.clone());
+                for host in this.conversation_hosts.values() {
+                    host.composer.update(cx, |composer, _| {
+                        composer.set_branch_prefix(event.0.clone())
+                    });
+                }
+            },
+        )
+        .detach();
         cx.subscribe(
             &settings,
             |this, _, event: &crate::settings::ChangeReviewDelivery, cx| {
@@ -732,10 +753,17 @@ impl ChatApp {
         let backend = self.agent_backend.clone();
         let mode = self.workspace_store.snapshot().preferences.follow_up_mode;
         let delivery = self.workspace_store.snapshot().preferences.review_delivery;
+        let branch_prefix = self
+            .workspace_store
+            .snapshot()
+            .preferences
+            .branch_prefix
+            .unwrap_or_else(|| "codex/".into());
         let composer = cx.new(|cx| {
             let mut composer = ComposerView::new_with_backend(self.mode, backend, cx);
             composer.set_follow_up_mode(mode, cx);
             composer.set_review_delivery(delivery, cx);
+            composer.set_branch_prefix(branch_prefix);
             composer
         });
         Self::wire_code_review(&composer, cx);

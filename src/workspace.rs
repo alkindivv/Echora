@@ -1357,6 +1357,10 @@ impl WorkspaceStore {
         self.update(|snapshot| snapshot.preferences.review_delivery = delivery);
         self.save_preferences();
     }
+    pub fn set_branch_prefix(&self, prefix: String) {
+        self.update(|snapshot| snapshot.preferences.branch_prefix = Some(prefix));
+        self.save_preferences();
+    }
     /// The thread summary panel's global pin, like the reference's
     /// `app-shell-summary-panel-pinned`.
     pub fn set_summary_panel_pinned(&self, pinned: bool) {

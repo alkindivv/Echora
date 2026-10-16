@@ -66,6 +66,9 @@ impl ComposerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if let Some(menu) = self.render_workspace_menu(window, cx) {
+            return Some(menu);
+        }
         if let Some(picker) = self.render_project_picker(window, cx) {
             return Some(picker);
         }

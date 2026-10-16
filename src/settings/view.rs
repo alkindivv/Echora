@@ -39,6 +39,7 @@ pub struct ChangeLanguage(pub crate::i18n::Language);
 pub struct ChangeFollowUpMode(pub crate::workspace::FollowUpMode);
 /// Git → Review delivery changed.
 pub struct ChangeReviewDelivery(pub crate::workspace::ReviewDelivery);
+pub struct ChangeBranchPrefix(pub String);
 pub struct ConfigSaveFinished;
 pub use hooks::OpenSettingsFile;
 
@@ -60,6 +61,7 @@ pub struct SettingsView {
     appearance_theme: usize,
     pub(super) follow_up_mode: crate::workspace::FollowUpMode,
     pub(super) review_delivery: crate::workspace::ReviewDelivery,
+    branch_prefix_input: gpui::Entity<crate::components::prompt_input::PromptInput>,
     /// What the configured model provider supports, read with the config.
     pub(super) provider_capabilities: Option<crate::agent::AgentProviderCapabilities>,
     /// A capture fixture's capabilities, which a read does not replace.
@@ -131,9 +133,15 @@ impl EventEmitter<ChangeTheme> for SettingsView {}
 impl EventEmitter<ChangeLanguage> for SettingsView {}
 impl EventEmitter<ChangeFollowUpMode> for SettingsView {}
 impl EventEmitter<ChangeReviewDelivery> for SettingsView {}
+impl EventEmitter<ChangeBranchPrefix> for SettingsView {}
 impl EventEmitter<OpenSettingsFile> for SettingsView {}
 
 impl SettingsView {
+    pub fn set_branch_prefix(&mut self, prefix: &str, cx: &mut Context<Self>) {
+        self.branch_prefix_input
+            .update(cx, |input, cx| input.set_text_silently(prefix, cx));
+    }
+
     pub fn set_follow_up_mode(
         &mut self,
         mode: crate::workspace::FollowUpMode,
@@ -165,6 +173,20 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> Self {
         let config_choices = backend.config_choices();
+        let branch_prefix_input = cx.new(|cx| {
+            let mut input =
+                crate::components::prompt_input::PromptInput::project_name(mode, "codex/", cx);
+            input.set_accessible_name(crate::i18n::format!("分支前缀" => "Branch prefix"));
+            input.set_text_silently("codex/", cx);
+            input
+        });
+        cx.subscribe(
+            &branch_prefix_input,
+            |_, input, _: &crate::components::prompt_input::PromptChanged, cx| {
+                cx.emit(ChangeBranchPrefix(input.read(cx).text().trim().to_owned()));
+            },
+        )
+        .detach();
         let config_field_focus = config_choices
             .iter()
             .map(|field| field.key.clone())
@@ -329,6 +351,7 @@ impl SettingsView {
             appearance_theme: if mode == ThemeMode::Dark { 2 } else { 1 },
             follow_up_mode: Default::default(),
             review_delivery: Default::default(),
+            branch_prefix_input,
             provider_capabilities: None,
             provider_capabilities_fixture: false,
             memory_status: None,

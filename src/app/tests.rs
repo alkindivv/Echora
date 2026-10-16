@@ -1607,6 +1607,34 @@ fn project_marker_tabs_outside_the_dialog_do_not_dismiss_the_form() {
 }
 
 #[test]
+fn draft_workspace_change_updates_its_host_and_every_open_panel() {
+    let mut app = TestApp::new();
+    let mut window = app.open_window(|_, cx| ChatApp::new(ThemeMode::Dark, false, cx));
+    let (composer, files, terminals, review) = window.update(|chat, _, cx| {
+        let composer = chat.home.read(cx).composer_entity();
+        let files = chat.file_panel(cx);
+        let terminals = chat.terminal_panel(cx);
+        chat.ensure_review(cx);
+        let review = chat.review_panels[&chat.active_conversation].clone();
+        composer.update(cx, |_, cx| {
+            cx.emit(crate::components::composer::DraftWorkspaceChanged(
+                PathBuf::from("/tmp/echora-created-worktree"),
+            ))
+        });
+        (composer, files, terminals, review)
+    });
+    app.run_until_parked();
+    window.read(|chat, cx| {
+        let host = &chat.conversation_hosts[&chat.active_conversation];
+        assert_eq!(host.composer, composer);
+        assert_eq!(host.cwd, PathBuf::from("/tmp/echora-created-worktree"));
+        assert_eq!(files.read(cx).workspace_root(), host.cwd);
+        assert_eq!(terminals.read(cx).workspace_root(), host.cwd);
+        assert_eq!(review.read(cx).workspace_root(), host.cwd);
+    });
+}
+
+#[test]
 fn selecting_draft_project_keeps_text_and_synchronizes_host_and_composer() {
     let mut app = TestApp::new();
     let mut window = app.open_window(|_, cx| ChatApp::new(ThemeMode::Dark, false, cx));

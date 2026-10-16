@@ -84,6 +84,7 @@ impl ComposerView {
                     }
                 }
                 this.start_pending_review(cx);
+                this.resume_worktree_send(cx);
                 cx.notify();
             });
         })

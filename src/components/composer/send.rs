@@ -89,6 +89,9 @@ impl SendAction {
 
 impl ComposerView {
     pub(super) fn send_action(&self, cx: &App) -> SendAction {
+        if self.workspace_controls.busy || self.workspace_controls.pending_send.is_some() {
+            return SendAction::Starting;
+        }
         if self.conversation.phase == ConversationPhase::Starting {
             return SendAction::Starting;
         }

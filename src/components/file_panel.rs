@@ -159,6 +159,10 @@ impl FilePanel {
     }
     pub fn set_workspace_root(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
         if self.cwd == cwd {
+            self.directories.clear();
+            self.load_directory(cwd, cx);
+            self.search(cx);
+            self.refresh_active(cx);
             return;
         }
         self.cwd = cwd.clone();

@@ -118,8 +118,8 @@ fn empty_state_names_the_drafts_project_and_branch(cx: &mut gpui::TestAppContext
     // One 33.6px heading line, rounded to the 1x test window's pixel grid.
     assert!((33.0..=34.0).contains(&f32::from(hero.size.height)));
     let branch = branch.expect("a branch checkout shows the branch control");
-    // 8px padding, 16px icon, 4px gap, the value's 160px clamp, 8px padding.
-    assert!((f32::from(branch.size.width) - 196.0).abs() <= 1.0);
+    // Reference: 9px per side including the border, 16px icon, 6px gap, 160px text.
+    assert!((f32::from(branch.size.width) - 200.0).abs() <= 1.0);
 
     // Pointer over the trigger keeps the layout: only its colour changes.
     visual.simulate_mouse_move(

@@ -541,34 +541,6 @@ impl ComposerView {
     }
 }
 
-pub(super) fn utility(
-    id: &'static str,
-    label: &'static str,
-    glyph: &'static str,
-    horizontal_padding: f32,
-    theme: Theme,
-) -> impl IntoElement {
-    let hover_fill = theme.text.alpha(0.05);
-
-    div()
-        .id(id)
-        .debug_selector(move || id.to_owned())
-        .h(px(28.0))
-        .px(px(horizontal_padding))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .gap(px(4.0))
-        .text_size(px(13.0))
-        .line_height(px(18.0))
-        .font_weight(gpui::FontWeight::NORMAL)
-        .text_color(theme.text)
-        .cursor_pointer()
-        .hover(move |style| style.bg(hover_fill))
-        .child(icon(glyph, theme.text.into()).size(px(16.0)))
-        .child(label)
-}
-
 /// The reference's `max-w-40` on the branch value in the home placement.
 const BRANCH_VALUE_MAX_WIDTH: f32 = 160.0;
 /// `mask-image: linear-gradient(90deg, #000 calc(100% - 1rem), transparent)`,
@@ -599,7 +571,7 @@ pub(super) fn project_utility(label: Option<SharedString>, theme: Theme) -> gpui
         .child(
             div()
                 .h(px(28.0))
-                .px(px(8.0))
+                .px(px(9.0))
                 .rounded_full()
                 .flex()
                 .items_center()
@@ -623,19 +595,19 @@ pub(super) fn project_utility(label: Option<SharedString>, theme: Theme) -> gpui
 
 /// Branch control on the home utility bar. The reference renders it only while
 /// the working directory's `HEAD` names a branch.
-fn branch_utility(branch: SharedString, theme: Theme) -> impl IntoElement {
+pub(super) fn branch_utility(branch: SharedString, theme: Theme) -> gpui::Stateful<Div> {
     let hover_fill = theme.text.alpha(0.05);
 
     div()
         .id("composer-branch")
         .debug_selector(|| "composer-branch".to_owned())
         .h(px(28.0))
-        .px(px(8.0))
+        .px(px(9.0))
         .rounded_full()
         .flex()
         .flex_none()
         .items_center()
-        .gap(px(4.0))
+        .gap(px(6.0))
         .text_size(px(13.0))
         .line_height(px(18.0))
         .font_weight(gpui::FontWeight::NORMAL)
@@ -748,6 +720,18 @@ pub(super) fn context_toolbar(
         .as_ref()
         .and_then(|checkout| checkout.branch())
         .map(|branch| SharedString::from(branch.to_owned()));
+    let branch = if composer.workspace_controls.worktree_mode
+        && composer.workspace_controls.worktree_cwd.is_none()
+    {
+        composer
+            .workspace_controls
+            .base
+            .clone()
+            .map(SharedString::from)
+            .or(branch)
+    } else {
+        branch
+    };
     div()
         .relative()
         .debug_selector(|| "composer-toolbar".to_owned())
@@ -779,21 +763,15 @@ pub(super) fn context_toolbar(
                 .px(px(6.0))
                 .flex()
                 .items_center()
-                .gap(px(4.0))
+                .gap(px(8.0))
                 .child(composer.project_trigger(theme, cx))
-                .child(utility(
-                    "composer-location",
-                    crate::i18n::text("本地"),
-                    "local",
-                    8.0,
-                    theme,
-                ))
+                .child(composer.location_trigger(theme, cx))
                 // Although the HTML includes a trailing `px-0` class, the
                 // home-placement `px-2` rule is emitted later in the bundled
                 // stylesheet and wins the cascade. The computed button has
-                // 8px inline padding on both sides.
+                // 8px inline padding plus a 1px transparent border per side.
                 .when_some(branch, |toolbar, branch| {
-                    toolbar.child(branch_utility(branch, theme))
+                    toolbar.child(composer.branch_trigger(branch, theme, cx))
                 }),
         )
 }

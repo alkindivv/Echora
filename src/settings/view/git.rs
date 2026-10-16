@@ -117,7 +117,30 @@ impl SettingsView {
                     .text_color(theme.text)
                     .child(crate::i18n::text(page.label)),
             )
-            .child(div().mt(px(32.0)).child(card(theme).child(delivery)))
+            .child(
+                div().mt(px(32.0)).child(
+                    card(theme)
+                        .child(row(
+                            crate::i18n::format!("分支前缀" => "Branch prefix"),
+                            None,
+                            Some(
+                                div()
+                                    .w(px(180.))
+                                    .h(px(32.))
+                                    .px(px(10.))
+                                    .rounded(px(8.))
+                                    .bg(theme.sidebar_hover)
+                                    .flex()
+                                    .items_center()
+                                    .child(self.branch_prefix_input.clone())
+                                    .into_any_element(),
+                            ),
+                            false,
+                            theme,
+                        ))
+                        .child(delivery),
+                ),
+            )
             .into_any_element()
     }
 }

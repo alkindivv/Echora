@@ -112,10 +112,11 @@ impl ComposerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.thread_id().is_some() {
+        if self.thread_id().is_some() || self.workspace_controls.busy {
             return;
         }
         self.project_picker.open = true;
+        self.workspace_controls.menu = None;
         self.project_picker.active_bounds =
             bounds.or_else(|| self.project_picker.trigger_bounds.get());
         self.project_picker.previous_focus = window.focused(cx);

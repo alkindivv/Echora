@@ -34,8 +34,13 @@ mod slash_menu_render;
 mod submissions;
 mod toast;
 mod workspace;
+mod workspace_controls;
+mod workspace_controls_render;
+#[cfg(test)]
+mod workspace_controls_tests;
 pub(crate) use project_picker::projectless_cwd;
 pub use project_picker::{DraftProjectSelected, OpenProjectCreation};
+pub use workspace_controls::{DraftWorkspaceChanged, OpenWorkspaceGitSettings};
 
 #[cfg(feature = "screenshot")]
 pub(crate) use capture::capture_find;
@@ -131,7 +136,12 @@ impl gpui::EventEmitter<ReviewCommentsRestored> for ComposerView {}
 
 gpui::actions!(
     composer,
-    [DismissContextMenu, DismissModelPicker, DismissProjectPicker]
+    [
+        DismissContextMenu,
+        DismissModelPicker,
+        DismissProjectPicker,
+        DismissWorkspaceMenu
+    ]
 );
 
 const MODEL_PICKER_WIDTH: f32 = 254.0;
@@ -204,6 +214,7 @@ pub struct ComposerView {
     workspace: WorkspacePresentation,
     checkout_cycle: u64,
     project_picker: project_picker::ProjectPicker,
+    workspace_controls: workspace_controls::WorkspaceControls,
     follow_up_mode: crate::workspace::FollowUpMode,
     review_delivery: crate::workspace::ReviewDelivery,
     /// The `/review` submenu's base branches, and the read they came from.
@@ -280,7 +291,21 @@ impl ComposerView {
             DismissProjectPicker,
             Some("ComposerProjectPicker"),
         )]);
+        cx.bind_keys([
+            gpui::KeyBinding::new(
+                "escape",
+                DismissWorkspaceMenu,
+                Some("ComposerWorkspaceMenu"),
+            ),
+            // Context-free bindings match at the deepest focus node too.
+            gpui::KeyBinding::new(
+                "escape",
+                DismissWorkspaceMenu,
+                Some("ComposerWorkspaceMenu > PromptInput"),
+            ),
+        ]);
         let project_picker = project_picker::ProjectPicker::new(mode, cx);
+        let workspace_controls = workspace_controls::WorkspaceControls::new(mode, cx);
         let connection_events = backend.subscribe_connection_events();
         let prompt_editor = cx.new(|cx| {
             let mut editor = crate::components::file_editor::FileEditor::composer(mode, cx);
@@ -448,6 +473,7 @@ impl ComposerView {
             workspace: WorkspacePresentation::default(),
             checkout_cycle: 0,
             project_picker,
+            workspace_controls,
             follow_up_mode: Default::default(),
             review_delivery: Default::default(),
             review_branches: Default::default(),
@@ -635,6 +661,9 @@ impl ComposerView {
         }
         let changed_cwd = self.conversation.cwd != cwd;
         let changed_project = self.conversation.project_id != project_id;
+        if changed_project || (changed_cwd && !self.workspace_controls.owns_cwd(&cwd)) {
+            self.workspace_controls.reset();
+        }
         self.conversation
             .set_workspace_context(cwd, project_id, thread_id);
         self.sync_thread_scoped_state(cx);
