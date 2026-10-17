@@ -605,11 +605,13 @@ impl SidebarView {
     }
 
     pub(super) fn thread_drag(&self, thread_id: &ThreadId, title: &str) -> Option<SidebarItemDrag> {
-        self.custom_sections_enabled().then(|| SidebarItemDrag {
-            item: SectionItem::Thread(thread_id.clone()),
-            label: title.to_owned().into(),
-            mode: self.mode,
-        })
+        (self.custom_sections_enabled() || self.snapshot.preferences.sidebar.manual_sort).then(
+            || SidebarItemDrag {
+                item: SectionItem::Thread(thread_id.clone()),
+                label: title.to_owned().into(),
+                mode: self.mode,
+            },
+        )
     }
 
     pub(super) fn project_drag(

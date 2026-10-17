@@ -1135,6 +1135,58 @@ fn escape_closes_the_profile_menu() {
 }
 
 #[test]
+fn sidebar_recents_menu_handles_global_escape_and_outside_clicks() {
+    let mut app = TestApp::new();
+    app.update(|cx| {
+        cx.bind_keys([gpui::KeyBinding::new(
+            "escape",
+            super::DismissPermissionUi,
+            None,
+        )])
+    });
+    let mut window = app.open_window_with_options(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(900.), px(700.)),
+            ))),
+            ..Default::default()
+        },
+        |_, cx| ChatApp::new(ThemeMode::Dark, false, cx),
+    );
+    window.draw();
+    let anchor = window.read(|app, cx| app.sidebar.read(cx).recents_menu_state().1.unwrap());
+    window.simulate_mouse_move(anchor.center());
+    window.draw();
+    window.simulate_click(anchor.center(), MouseButton::Left);
+    window.draw();
+    assert!(window.read(|app, cx| app.sidebar.read(cx).recents_menu_state().0));
+    window.simulate_keystrokes("escape");
+    window.draw();
+    assert!(!window.read(|app, cx| app.sidebar.read(cx).recents_menu_state().0));
+    window.simulate_click(anchor.center(), MouseButton::Left);
+    window.draw();
+    assert!(window.read(|app, cx| app.sidebar.read(cx).recents_menu_state().0));
+    window.simulate_click(point(px(700.), px(300.)), MouseButton::Left);
+    window.draw();
+    assert!(!window.read(|app, cx| app.sidebar.read(cx).recents_menu_state().0));
+    let target = anchor.center() + point(px(28.), px(0.));
+    window.simulate_mouse_move(target);
+    window.draw();
+    window.simulate_click(target, MouseButton::Left);
+    window.draw();
+    window.update(|app, window, cx| {
+        let composer = &app
+            .conversation_hosts
+            .get(&app.active_conversation)
+            .unwrap()
+            .composer;
+        assert!(composer.read(cx).prompt_focus_handle(cx).is_focused(window));
+        assert!(!app.draft_focus_pending);
+    });
+}
+
+#[test]
 fn projects_menu_closes_when_the_main_surface_is_clicked() {
     let mut app = TestApp::new();
     let mut window = app.open_window_with_options(

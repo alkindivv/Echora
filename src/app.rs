@@ -124,6 +124,8 @@ pub struct ChatApp {
     side_chat_panels: HashMap<ConversationKey, Entity<SideChatPanel>>,
     file_close_prompt_open: bool,
     terminal_return_focus_pending: bool,
+    /// Focus a fresh draft before any child paints its accessibility node.
+    draft_focus_pending: bool,
     right_panel: RightPanelState,
     /// The chats whose right panel was open when the window left them. The
     /// panel belongs to its chat: another chat, or a page that is not a chat,
@@ -636,6 +638,7 @@ impl ChatApp {
             side_chat_panels: HashMap::new(),
             file_close_prompt_open: false,
             terminal_return_focus_pending: false,
+            draft_focus_pending: false,
             right_panel: RightPanelState::new(cx),
             right_panel_chats: HashSet::new(),
             right_panel_parked: false,

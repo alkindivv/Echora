@@ -77,6 +77,12 @@ func text(_ text: String) {
     }
     pasteboard.clearContents(); pasteboard.setString(text, forType: .string)
     key(9, command: true)
+    // The native event queue can lag behind the driver during a new draft's
+    // first layout. Keep the fixture available until the app consumes Paste.
+    for _ in 0..<100 {
+        if elements().contains(where: { (value($0, kAXValueAttribute) as? String)?.contains(text) == true }) { break }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
     pasteboard.clearContents(); pasteboard.writeObjects(saved)
     Thread.sleep(forTimeInterval: 0.2)
 }
@@ -100,7 +106,7 @@ func record(_ label: String) {
     let metadata = URL(fileURLWithPath: capture.path + ".render.json")
     try? FileManager.default.removeItem(at: metadata)
     key(111, command: true, shift: true)
-    for _ in 0..<200 {
+    for _ in 0..<600 {
         if FileManager.default.fileExists(atPath: capture.path) && FileManager.default.fileExists(atPath: metadata.path) { break }
         Thread.sleep(forTimeInterval: 0.05)
     }
@@ -118,6 +124,44 @@ func record(_ label: String) {
 if option("scenario") == "capture" {
     record("00-capture")
     print("Verified app-owned capture without Screen Recording or Apple Events")
+    exit(0)
+}
+if option("scenario") == "recents" {
+    app.activate(options: [.activateAllWindows]); Thread.sleep(forTimeInterval: 0.5)
+    func menuItem(_ label: String) -> AXUIElement {
+        for _ in 0..<50 {
+            if let e=elements().first(where: { title($0)==label && value($0,kAXRoleAttribute) as? String == "AXMenuItem" }) {return e}
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        fatalError("Missing menu item: \(label)")
+    }
+    let options = "Chat sidebar options"
+    func openRecents() {
+        key(53)
+        for _ in 0..<4 {
+            click(find(options))
+            if elements().contains(where: {title($0)=="Organize sidebar"}) {return}
+            Thread.sleep(forTimeInterval:0.3)
+        }
+        fatalError("Recents menu did not open")
+    }
+    openRecents(); record("01-menu")
+    click(find("Organize sidebar")); record("02-organize")
+    click(find("Combined")); record("03-combined")
+    openRecents(); click(find("Sort chats by")); record("04-sort")
+    click(find("Manual order")); record("05-manual")
+    openRecents(); key(125); key(124); key(123); key(53); record("06-keyboard-dismiss")
+    precondition(!elements().contains(where: { title($0) == "Organize sidebar" }), "Escape did not dismiss menu")
+    openRecents(); click(find("Organize sidebar")); click(find("By project"))
+    openRecents(); click(menuItem("Projects")); record("07-projects-hidden")
+    openRecents(); click(menuItem("Projects")); record("08-projects-restored")
+    let newChat = elements().first(where: { title($0) == "New chat" && value($0,kAXRoleAttribute) as? String == "AXButton" })!
+    click(newChat, edge: -1)
+    text("Recents focus check")
+    precondition(value(find("Chat input"), kAXValueAttribute) as? String == "Recents focus check", "New chat did not focus the composer")
+    record("09-new-chat")
+    key(0,command:true); key(51)
+    print("Verified Recents menus, layout choices, sorting, keyboard dismissal, visibility, and New chat")
     exit(0)
 }
 func waitForBranches() {

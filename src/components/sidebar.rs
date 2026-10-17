@@ -33,6 +33,7 @@ use crate::{
 };
 
 mod activity;
+mod recents;
 mod sections;
 #[cfg(test)]
 mod sections_tests;
@@ -221,7 +222,6 @@ const THREAD_TITLE_LINE_HEIGHT: f32 = 20.0;
 const FOOTER_HELP_BUTTON: f32 = 32.0;
 const FOOTER_HEIGHT: f32 = 46.0;
 const MAX_VISIBLE_PROJECT_THREADS: usize = 5;
-const MAX_VISIBLE_RECENTS: usize = 10;
 const SIDEBAR_BODY_FONT_WEIGHT: gpui::FontWeight = crate::theme::UI_BODY_FONT_WEIGHT;
 const MARQUEE_HOVER_DELAY: Duration = Duration::from_millis(350);
 const MARQUEE_SPEED: f32 = 28.0;
@@ -849,6 +849,7 @@ pub struct SidebarView {
     selected_project_id: Option<ProjectId>,
     selected_thread_id: Option<ThreadId>,
     hovered_thread_id: Option<ThreadId>,
+    hovered_thread_indented: Option<bool>,
     hovered_project_id: Option<ProjectId>,
     /// Bounds of every rendered project row, recorded while prepainting so the
     /// hover card can anchor to the row instead of the pointer.
@@ -895,6 +896,9 @@ pub struct SidebarView {
     menu_origin: (f32, f32),
     delete_confirmation: Option<DeleteTarget>,
     projects_section_menu_open: bool,
+    recents_menu: recents::RecentsMenu,
+    recent_visible_count: usize,
+    recent_loader_requested: Rc<Cell<usize>>,
     pinned_menu_open: bool,
     profile_menu_open: bool,
     /// Custom section whose "Options for {name}" menu is open.
@@ -1028,6 +1032,7 @@ impl SidebarView {
             selected_project_id: None,
             selected_thread_id: None,
             hovered_thread_id: None,
+            hovered_thread_indented: None,
             hovered_project_id: None,
             project_row_bounds: Rc::new(RefCell::new(HashMap::new())),
             thread_row_bounds: Rc::new(RefCell::new(HashMap::new())),
@@ -1057,6 +1062,12 @@ impl SidebarView {
             menu_origin: (0.0, 0.0),
             delete_confirmation: None,
             projects_section_menu_open: false,
+            recent_visible_count: 20,
+            recent_loader_requested: Rc::new(Cell::new(0)),
+            recents_menu: recents::RecentsMenu {
+                focus: Some(cx.focus_handle()),
+                ..Default::default()
+            },
             pinned_menu_open: false,
             profile_menu_open: false,
             section_menu_id: None,
@@ -1153,6 +1164,9 @@ impl SidebarView {
         self.thread_menu_id = None;
         self.section_menu_id = None;
         self.projects_section_menu_open = false;
+        self.recents_menu.open = false;
+        self.recents_menu.submenu = None;
+        self.recents_menu.sub_selected = None;
         self.pinned_menu_open = false;
         self.profile_menu_open = false;
         self.activity_menu_open = false;
@@ -1263,6 +1277,12 @@ impl SidebarView {
     pub fn hover_thread_for_capture(&mut self, thread: &str, cx: &mut Context<Self>) {
         self.open_thread_hover_card_for_capture(thread, cx);
         self.hovered_thread_id = self.thread_hover_card.clone();
+        self.hovered_thread_indented = Some(
+            self.hovered_thread_id
+                .as_deref()
+                .and_then(|id| self.project_for_thread(id))
+                .is_some(),
+        );
         cx.notify();
     }
 
@@ -2034,7 +2054,10 @@ impl SidebarView {
         } = placement;
         let thread_id = thread.thread_id.clone();
         let selected = self.selected_thread_id.as_deref() == Some(thread_id.as_str());
-        let hovered = self.hovered_thread_id.as_deref() == Some(thread_id.as_str());
+        let hovered = self.hovered_thread_id.as_deref() == Some(thread_id.as_str())
+            && self
+                .hovered_thread_indented
+                .is_none_or(|value| value == indented);
         let pending = self.snapshot.is_pending_thread(&thread_id);
         let active = matches!(thread.activity, ThreadActivity::Active { .. });
         let status_error = matches!(thread.activity, ThreadActivity::SystemError);
@@ -2181,6 +2204,9 @@ impl SidebarView {
         let drag = (!archived && !pending)
             .then(|| self.thread_drag(&thread_id, &thread.title))
             .flatten();
+        let own_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
+        let paint_bounds = own_bounds.clone();
+        let reorder_target = thread_id.clone();
         let selector_id = thread_id.clone();
         div()
             .id(format!("thread-row-{thread_id}"))
@@ -2188,6 +2214,27 @@ impl SidebarView {
             .when_some(drag, |row, drag| {
                 row.on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
             })
+            .when(
+                !archived && !pinned && self.snapshot.preferences.sidebar.manual_sort,
+                |row| {
+                    let bounds = own_bounds;
+                    row.drag_over::<sections::SidebarItemDrag>(move |s, _, _, _| {
+                        s.border_t_1().border_color(theme.sidebar_text_muted)
+                    })
+                    .on_drop(cx.listener(
+                        move |this, drag: &sections::SidebarItemDrag, window, cx| {
+                            if let crate::workspace::SectionItem::Thread(id) = &drag.item {
+                                let after = bounds
+                                    .get()
+                                    .is_some_and(|r| window.mouse_position().y > r.center().y);
+                                this.store
+                                    .reorder_sidebar_thread(id, &reorder_target, after);
+                                cx.stop_propagation();
+                            }
+                        },
+                    ))
+                },
+            )
             .h(px(ROW_HEIGHT))
             .relative()
             .pl(px(ROW_HORIZONTAL_PADDING))
@@ -2297,7 +2344,11 @@ impl SidebarView {
                 // deferred so the sidebar's own clip never cuts it off.
                 canvas(
                     move |bounds, _window, _cx| {
-                        row_bounds.borrow_mut().insert(bounds_id.clone(), bounds);
+                        paint_bounds.set(Some(bounds));
+                        let mut rows = row_bounds.borrow_mut();
+                        if indented || hovered || !rows.contains_key(&bounds_id) {
+                            rows.insert(bounds_id.clone(), bounds);
+                        }
                     },
                     |_, _, _window, _cx| {},
                 )
@@ -2309,14 +2360,18 @@ impl SidebarView {
             .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
                 if *hovered {
                     this.hovered_thread_id = Some(hover_id.clone());
+                    this.hovered_thread_indented = Some(indented);
                     this.start_marquee(
                         &marquee_title,
                         sidebar_thread_title_viewport_width(this.width, !indented, true),
                         window,
                         cx,
                     );
-                } else if this.hovered_thread_id.as_deref() == Some(hover_id.as_str()) {
+                } else if this.hovered_thread_id.as_deref() == Some(hover_id.as_str())
+                    && this.hovered_thread_indented == Some(indented)
+                {
                     this.hovered_thread_id = None;
+                    this.hovered_thread_indented = None;
                     this.stop_marquee();
                 }
                 this.set_thread_row_hovered(card_id.clone(), *hovered, cx);
@@ -2372,8 +2427,10 @@ impl SidebarView {
         let menu_open = self.project_menu_id.as_deref() == Some(project_id.as_str());
         let threads = self
             .snapshot
-            .recent_threads
-            .iter()
+            .preferences
+            .sidebar
+            .ordered(&self.snapshot.recent_threads)
+            .into_iter()
             .filter(|thread| {
                 project_id_for_thread(thread, &self.snapshot.projects).as_deref()
                     == Some(project_id.as_str())
@@ -2600,8 +2657,10 @@ impl SidebarView {
         let project_id = project.project_id.clone();
         let threads = self
             .snapshot
-            .recent_threads
-            .iter()
+            .preferences
+            .sidebar
+            .ordered(&self.snapshot.recent_threads)
+            .into_iter()
             .filter(|thread| {
                 project_id_for_thread(thread, &self.snapshot.projects).as_deref()
                     == Some(project_id.as_str())
@@ -3341,14 +3400,13 @@ impl SidebarView {
         let pinned_ids = self.sectioned_thread_ids();
         let threads = self
             .snapshot
-            .recent_threads
-            .iter()
-            .filter(|thread| {
-                project_id_for_thread(thread, &self.snapshot.projects).is_none()
-                    && !pinned_ids.contains(thread.thread_id.as_str())
-            })
-            .take(MAX_VISIBLE_RECENTS)
+            .preferences
+            .sidebar
+            .ordered(&self.snapshot.recent_threads)
+            .into_iter()
+            .filter(|thread| !pinned_ids.contains(thread.thread_id.as_str()))
             .collect::<Vec<_>>();
+        let has_more = threads.len() > self.recent_visible_count;
         let section = self
             .section_exit_drop(
                 div()
@@ -3359,14 +3417,7 @@ impl SidebarView {
                 theme,
                 cx,
             )
-            .child(self.section_header(
-                "recent-heading",
-                crate::i18n::text("最近"),
-                collapsed,
-                RECENTS_HEADER_HEIGHT,
-                theme,
-                cx,
-            ));
+            .child(self.recent_heading(theme, cx));
         if collapsed {
             return section;
         }
@@ -3389,7 +3440,7 @@ impl SidebarView {
             .flex()
             .flex_col()
             .gap(px(ROW_GAP));
-        for thread in threads {
+        for thread in threads.into_iter().take(self.recent_visible_count) {
             list = list.child(self.thread_row(
                 thread,
                 ThreadRowPlacement {
@@ -3402,7 +3453,9 @@ impl SidebarView {
                 cx,
             ));
         }
-        section.child(list)
+        section.child(list).when(has_more, |section| {
+            section.child(self.recents_loader(theme, cx))
+        })
     }
 
     fn archived_content(
@@ -3652,7 +3705,11 @@ impl SidebarView {
                         content.child(self.pinned_section(theme, window, cx))
                     })
                     .children(self.custom_section_elements(theme, window, cx))
-                    .child(self.projects_section(theme, window, cx))
+                    .when(
+                        !self.snapshot.preferences.sidebar.combined
+                            && !self.snapshot.preferences.sidebar.projects_hidden,
+                        |content| content.child(self.projects_section(theme, window, cx)),
+                    )
                     .child(self.recent_section(theme, window, cx))
             })
     }
@@ -4517,7 +4574,8 @@ impl Render for SidebarView {
             // once over the native blur. Painting the same translucent tint in
             // this content view would compound its alpha and make the settled
             // sidebar appear opaque in both light and dark themes.
-            .text_color(theme.sidebar_text);
+            .text_color(theme.sidebar_text)
+            .on_key_down(cx.listener(Self::recents_key));
         if self.archived_open {
             sidebar = sidebar
                 .child(self.subpage_header(crate::i18n::text("已归档"), theme, cx))
@@ -4605,6 +4663,9 @@ impl Render for SidebarView {
                     .bottom(px(ACCOUNT_MENU_BOTTOM))
                     .child(self.account_menu(theme, window.scale_factor(), cx)),
             ));
+        }
+        if let Some(menu) = self.recents_overlay(theme, window, cx) {
+            sidebar = sidebar.child(menu);
         }
         if let Some(menu) = self.activity_options_menu(theme, window.scale_factor(), cx) {
             sidebar = sidebar.child(deferred(menu));
@@ -5777,6 +5838,100 @@ mod tests {
         if let Some(parent) = preferences.parent() {
             let _ = std::fs::remove_dir_all(parent);
         }
+    }
+    #[test]
+    fn recents_buttons_use_full_hit_areas_and_start_a_projectless_draft() {
+        let path = std::env::temp_dir()
+            .join(format!("echora-recents-{}", std::process::id()))
+            .join("preferences.json");
+        let store = WorkspaceStore::with_preferences_path(SidebarBackend::new(), path.clone());
+        store.refresh_all();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while store.snapshot().loading.projects || store.snapshot().loading.recent {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut app = TestApp::new();
+        let mut window = app.open_window_with_options(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(0.), px(0.)),
+                    size(px(900.), px(700.)),
+                ))),
+                ..Default::default()
+            },
+            |_, cx| SidebarView::new(ThemeMode::Dark, false, store.clone(), cx),
+        );
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        window.update(|_, _, cx| {
+            cx.subscribe(
+                &cx.entity(),
+                move |_: &mut SidebarView, _, e: &super::NewConversation, _| {
+                    recorded.lock().unwrap().push(e.clone());
+                },
+            )
+            .detach();
+        });
+        window.draw();
+        let anchor = window.read(|s, _| s.recents_menu.anchor.get().unwrap());
+        for dx in [-11., 0., 11.] {
+            for dy in [-11., 0., 11.] {
+                let p = anchor.center() + point(px(dx), px(dy));
+                window.simulate_mouse_move(p);
+                window.draw();
+                window.simulate_click(p, MouseButton::Left);
+                window.draw();
+                assert!(window.read(|s, _| s.recents_menu.open));
+                window.update(|s, _, cx| s.close_transient_menus(cx));
+                window.draw();
+            }
+        }
+        for dx in [-11., 0., 11.] {
+            for dy in [-11., 0., 11.] {
+                window.update(|s, _, _| {
+                    s.selected_project_id = Some("project-stable-id".into());
+                    s.selected_thread_id = Some("thread-stable-id".into());
+                });
+                let p = anchor.center() + point(px(28. + dx), px(dy));
+                window.simulate_mouse_move(p);
+                window.draw();
+                window.simulate_click(p, MouseButton::Left);
+                window.draw();
+            }
+        }
+        assert_eq!(events.lock().unwrap().len(), 9);
+        assert!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|e| e.project_id.is_none())
+        );
+        assert!(!store.snapshot().preferences.recent_collapsed);
+        window.simulate_mouse_move(anchor.center());
+        window.draw();
+        window.simulate_click(anchor.center(), MouseButton::Left);
+        window.draw();
+        for key in ["down", "right", "down", "enter"] {
+            window.simulate_keystroke(key);
+            window.draw();
+        }
+        assert!(store.snapshot().preferences.sidebar.combined);
+        assert!(!window.read(|s, _| s.recents_menu.open));
+        window.update(|s, _, _| s.snapshot = store.snapshot());
+        window.draw();
+        let anchor = window.read(|s, _| s.recents_menu.anchor.get().unwrap());
+        window.simulate_mouse_move(anchor.center());
+        window.draw();
+        window.simulate_click(anchor.center(), MouseButton::Left);
+        window.draw();
+        for key in ["down", "down", "right", "down", "enter"] {
+            window.simulate_keystroke(key);
+            window.draw();
+        }
+        assert!(store.snapshot().preferences.sidebar.manual_sort);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
 

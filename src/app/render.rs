@@ -256,7 +256,7 @@ impl Render for ChatApp {
             .and_then(|composer| {
                 composer.update(cx, |composer, cx| composer.render_overlay(window, cx))
             });
-        if self.terminal_return_focus_pending {
+        if self.terminal_return_focus_pending || self.draft_focus_pending {
             if let Some(host) = self.conversation_hosts.get(&self.active_conversation) {
                 host.composer
                     .read(cx)
@@ -264,6 +264,7 @@ impl Render for ChatApp {
                     .focus(window, cx);
             }
             self.terminal_return_focus_pending = false;
+            self.draft_focus_pending = false;
         }
         let viewport = window.viewport_size();
         if window.focused(cx).is_none() {
@@ -556,6 +557,10 @@ impl Render for ChatApp {
                 if this.sidebar.read(cx).activity_archive_confirmation().is_some() {
                     this.sidebar
                         .update(cx, |sidebar, cx| sidebar.dismiss_activity_archive(cx));
+                    cx.stop_propagation();
+                    return;
+                }
+                if this.sidebar.update(cx, |sidebar, cx| sidebar.dismiss_recents_menu(window, cx)) {
                     cx.stop_propagation();
                     return;
                 }

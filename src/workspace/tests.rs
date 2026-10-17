@@ -1000,3 +1000,54 @@ fn project_marker_persists_independently_of_server_projects() {
         let _ = fs::remove_dir_all(parent);
     }
 }
+
+#[test]
+fn sidebar_layout_and_manual_order_survive_restart_and_do_not_move_threads() {
+    let path = test_preferences_path("sidebar-order");
+    let backend = FakeWorkspaceBackend::new();
+    let store = WorkspaceStore::with_preferences_path(backend.clone(), path.clone());
+    store.update(|s| {
+        s.recent_threads = vec![
+            thread("a", Some("project")),
+            thread("b", None),
+            thread("c", None),
+        ]
+    });
+    store.set_sidebar_preferences(SidebarPreferences {
+        combined: true,
+        projects_hidden: true,
+        manual_sort: true,
+        ..Default::default()
+    });
+    store.reorder_sidebar_thread("c", "a", false);
+    assert_eq!(
+        store.snapshot().preferences.sidebar.thread_order,
+        ["c", "a", "b"]
+    );
+    store.reorder_sidebar_thread("c", "b", true);
+    assert_eq!(
+        store.snapshot().preferences.sidebar.thread_order,
+        ["a", "b", "c"]
+    );
+    store.reorder_sidebar_thread("missing", "a", false);
+    assert_eq!(
+        store.snapshot().recent_threads[0].project_id.as_deref(),
+        Some("project")
+    );
+    let reopened = WorkspaceStore::with_preferences_path(backend, path.clone());
+    assert_eq!(
+        reopened.snapshot().preferences.sidebar,
+        store.snapshot().preferences.sidebar
+    );
+    let mut preferences = store.snapshot().preferences.sidebar;
+    let mut refreshed = store.snapshot().recent_threads;
+    refreshed.insert(0, thread("new", None));
+    assert_eq!(preferences.ordered(&refreshed)[0].thread_id, "new");
+    preferences.manual_sort = false;
+    preferences.thread_order.reverse();
+    assert_eq!(
+        preferences.ordered(&store.snapshot().recent_threads)[0].thread_id,
+        "a"
+    );
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}

@@ -824,7 +824,7 @@ impl SidebarView {
 
     /// A `transparent` secondary icon button: no plate, the glyph brightens
     /// on hover and while its menu is open.
-    fn activity_transparent_button(
+    pub(super) fn activity_transparent_button(
         id: &'static str,
         glyph: &'static str,
         open: bool,

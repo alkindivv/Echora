@@ -808,11 +808,6 @@ impl ComposerView {
         self.conversation.apply_agent_event_batch(events)
     }
 
-    pub fn focus_prompt(&mut self, cx: &mut Context<Self>) {
-        self.focus_prompt_pending = true;
-        cx.notify();
-    }
-
     pub fn set_mode(&mut self, mode: ThemeMode, cx: &mut Context<Self>) {
         self.mode = mode;
         self.project_picker

@@ -189,8 +189,8 @@ impl ChatApp {
         let composer = self.new_host_composer(cx);
         composer.update(cx, |composer, cx| {
             composer.set_workspace_context(cwd.clone(), project_id.clone(), None, cx);
-            composer.focus_prompt(cx);
         });
+        self.draft_focus_pending = true;
         let key = ConversationKey::Draft(draft_id);
         self.conversation_hosts.insert(
             key.clone(),

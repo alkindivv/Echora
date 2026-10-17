@@ -31,6 +31,8 @@ pub struct UiPreferences {
     #[serde(default)]
     pub recent_collapsed: bool,
     #[serde(default)]
+    pub sidebar: SidebarPreferences,
+    #[serde(default)]
     pub review: ReviewPreferences,
     #[serde(default)]
     pub skip_side_chat_close_confirmation: bool,
@@ -98,6 +100,43 @@ pub struct UiPreferences {
 }
 
 pub const ATTACHMENT_RECORD_THREAD_LIMIT: usize = 100;
+
+/// Desktop sidebar choices; independent of app-server section membership.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SidebarPreferences {
+    pub combined: bool,
+    pub projects_hidden: bool,
+    pub manual_sort: bool,
+    pub thread_order: Vec<ThreadId>,
+}
+
+impl SidebarPreferences {
+    pub fn ordered<'a>(
+        &self,
+        threads: &'a [crate::agent::ThreadSummary],
+    ) -> Vec<&'a crate::agent::ThreadSummary> {
+        let mut rows = threads.iter().collect::<Vec<_>>();
+        if self.manual_sort {
+            let positions = self
+                .thread_order
+                .iter()
+                .enumerate()
+                .map(|(index, id)| (id.as_str(), index))
+                .collect::<std::collections::HashMap<_, _>>();
+            // New chats stay reachable at the top; existing chats keep their
+            // chosen order even when their recency changes.
+            rows.sort_by_key(|thread| {
+                positions
+                    .get(thread.thread_id.as_str())
+                    .copied()
+                    .map(|index| index + 1)
+                    .unwrap_or(0)
+            });
+        }
+        rows
+    }
+}
 pub const ATTACHMENT_RECORD_PER_THREAD_LIMIT: usize = 100;
 pub const BACKFILL_COMPLETED_LIMIT: usize = 100;
 

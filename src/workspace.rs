@@ -27,7 +27,7 @@ use loaders::{
 };
 pub use preferences::{
     ActivityPreferences, FollowUpMode, PanelRatio, ProjectMarker, ReviewDelivery,
-    ReviewPreferences, UiPreferences, preferred_language,
+    ReviewPreferences, SidebarPreferences, UiPreferences, preferred_language,
 };
 use preferences::{PreferenceStore, default_preferences_path};
 pub use pull_requests::{
@@ -1287,6 +1287,33 @@ impl WorkspaceStore {
     pub fn set_activity_preferences(&self, activity: ActivityPreferences) {
         self.update(|snapshot| snapshot.preferences.activity = activity);
         self.save_preferences();
+    }
+
+    pub fn set_sidebar_preferences(&self, sidebar: SidebarPreferences) {
+        self.update(|snapshot| snapshot.preferences.sidebar = sidebar);
+        self.save_preferences();
+    }
+
+    /// Move within the current chat order without changing project or section.
+    pub fn reorder_sidebar_thread(&self, thread_id: &str, target: &str, after: bool) {
+        let snapshot = self.snapshot();
+        if thread_id == target || !snapshot.preferences.sidebar.manual_sort {
+            return;
+        }
+        let mut sidebar = snapshot.preferences.sidebar.clone();
+        let mut order = sidebar
+            .ordered(&snapshot.recent_threads)
+            .iter()
+            .map(|thread| thread.thread_id.clone())
+            .collect::<Vec<_>>();
+        if !order.iter().any(|id| id == thread_id) || !order.iter().any(|id| id == target) {
+            return;
+        }
+        order.retain(|id| id != thread_id);
+        let index = order.iter().position(|id| id == target).unwrap() + usize::from(after);
+        order.insert(index, thread_id.to_owned());
+        sidebar.thread_order = order;
+        self.set_sidebar_preferences(sidebar);
     }
 
     pub fn set_project_collapsed(&self, project_id: ProjectId, collapsed: bool) {
