@@ -112,13 +112,13 @@ impl ComposerView {
                                 .group(group.clone())
                                 .relative().flex_none().size(px(122.0))
                                 .rounded(px(10.0)).cursor_pointer()
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    cx.emit(OpenAttachmentPreview(path.clone()));
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !this.reopen_sketch(&path,cx) { cx.emit(OpenAttachmentPreview(path.clone())); }
                                     cx.stop_propagation();
                                 }))
-                                .on_key_down(cx.listener(move |_, event: &KeyDownEvent, _, cx| {
+                                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                                     if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                        cx.emit(OpenAttachmentPreview(key_path.clone()));
+                                        if !this.reopen_sketch(&key_path,cx) { cx.emit(OpenAttachmentPreview(key_path.clone())); }
                                         cx.stop_propagation();
                                     }
                                 }))

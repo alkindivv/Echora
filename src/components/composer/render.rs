@@ -95,6 +95,16 @@ impl ComposerView {
             }))
             // ⌘Z undoes the composer text first, then restores the last
             // removed queued message, as the reference's app undo does.
+            .capture_action(cx.listener(|this, _: &crate::components::file_editor::EditorTab, _, cx| {
+                if this.slash_menu_key("tab", false, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &crate::app::DismissPermissionUi, _, cx| {
+                if this.slash_menu_key("escape", false, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .capture_action(cx.listener(|this, _: &crate::components::file_editor::EditorUndo, _, cx| {
                 let text_undo = this.prompt_editor.read(cx).can_undo();
                 if !text_undo && this.undo_queue_removal(cx) {
@@ -110,14 +120,17 @@ impl ComposerView {
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 let modifiers = event.keystroke.modifiers;
                 let ctrl_only = modifiers.control && !modifiers.platform && !modifiers.alt && !modifiers.shift;
-                if (!modifiers.modified() || ctrl_only)
+                // macOS can mark synthetic and hardware navigation keys with
+                // the Fn flag. It does not change slash-menu navigation.
+                let plain = !modifiers.control && !modifiers.platform && !modifiers.alt && !modifiers.shift;
+                if (plain || ctrl_only)
                     && this.slash_menu_key(event.keystroke.key.as_str(), ctrl_only, cx)
                 {
                     cx.stop_propagation();
                     return;
                 }
                 if event.keystroke.key == "up"
-                    && !modifiers.modified()
+                    && plain
                     && this.prompt_focus_handle(cx).is_focused(window)
                     && this.queue_supported()
                     && this.edit_last_queued(cx)
@@ -129,6 +142,7 @@ impl ComposerView {
             .flex()
             .flex_col()
             .gap(px(0.0))
+            .children(self.render_command_status(theme,cx))
             .when(!conversation_started && !self.side_chat, |composer| {
                 composer.child(context_toolbar(self, theme, cx))
             })

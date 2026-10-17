@@ -77,9 +77,10 @@ pub use auto_approval::{
 };
 pub(crate) use backend::AgentInterruptControl;
 pub use backend::{
-    AgentBackend, AgentCapabilities, AgentCapability, AgentExternalTurn, AgentInputFile,
-    AgentInterruptHandle, AgentInterruptOutcome, AgentPromptContext, AgentRequest, AgentRun,
-    AgentSteerRequest, AgentTurnIdentity, SideConversationRequest, WorkspaceError, WorkspaceResult,
+    AgentBackend, AgentCapabilities, AgentCapability, AgentExternalTurn, AgentFeedbackRequest,
+    AgentInputFile, AgentInputReference, AgentInputReferenceKind, AgentInterruptHandle,
+    AgentInterruptOutcome, AgentPromptContext, AgentRequest, AgentRun, AgentSteerRequest,
+    AgentTurnIdentity, SideConversationRequest, WorkspaceError, WorkspaceResult,
 };
 pub use catalog::{
     AgentActivePermissionProfile, AgentActiveTurnReviewerUpdate, AgentEffectivePermissions,

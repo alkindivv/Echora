@@ -13,6 +13,8 @@ mod followup_edit;
 mod followup_render;
 mod git_actions;
 pub use git_actions::{GitActionsDetected, SyncThreadGitBranch};
+mod command_catalog;
+mod command_panels;
 mod goal;
 mod goal_render;
 mod layout;
@@ -20,6 +22,8 @@ mod memories;
 #[cfg(test)]
 mod memories_tests;
 mod permissions;
+mod pet;
+pub(crate) use pet::DesktopPet;
 mod picker;
 mod project_picker;
 mod render;
@@ -29,6 +33,7 @@ mod runtime;
 mod send;
 mod shell;
 mod side_chat;
+mod sketch;
 mod slash_menu;
 mod slash_menu_render;
 mod submissions;
@@ -117,6 +122,15 @@ impl gpui::EventEmitter<RequestFullAccessConfirmation> for ComposerView {}
 
 pub struct ModelCatalogLoadFinished;
 impl gpui::EventEmitter<ModelCatalogLoadFinished> for ComposerView {}
+
+pub struct ToggleDesktopPet;
+impl gpui::EventEmitter<ToggleDesktopPet> for ComposerView {}
+pub struct FeedbackContextRequested;
+impl gpui::EventEmitter<FeedbackContextRequested> for ComposerView {}
+
+pub struct SlashChatAction(pub(crate) slash_menu::SlashCommand);
+impl gpui::EventEmitter<SlashChatAction> for ComposerView {}
+pub(crate) use slash_menu::SlashCommand;
 
 pub struct ConversationChanged;
 impl gpui::EventEmitter<ConversationChanged> for ComposerView {}
@@ -247,6 +261,10 @@ pub struct ComposerView {
     /// Where long goal objectives are written, resolved once.
     codex_home: Option<std::path::PathBuf>,
     slash_menu: Option<slash_menu::SlashMenu>,
+    command_catalog: command_catalog::CommandCatalog,
+    command_panels: command_panels::CommandPanels,
+    sketch: sketch::SketchState,
+    slash_scroll: gpui::ScrollHandle,
     toasts: Vec<toast::ComposerToast>,
     toast_actions: std::collections::HashMap<u64, toast::ToastAction>,
     next_toast_id: u64,
@@ -323,6 +341,7 @@ impl ComposerView {
                 match event {
                     crate::components::file_editor::EditorEvent::Changed => {
                         this.draft_revision = this.draft_revision.wrapping_add(1);
+                        this.prompt_context.references = editor.read(cx).references().to_vec();
                         this.update_slash_menu(cx);
                     }
                     crate::components::file_editor::EditorEvent::Submit => {
@@ -332,7 +351,12 @@ impl ComposerView {
                         }
                     }
                     crate::components::file_editor::EditorEvent::SubmitInverted => {
-                        this.submit_prompt_as(editor.read(cx).text().to_owned(), true, cx);
+                        if !this.slash_menu_enter(cx) {
+                            this.submit_prompt_as(editor.read(cx).text().to_owned(), true, cx);
+                        }
+                    }
+                    crate::components::file_editor::EditorEvent::SelectionChanged => {
+                        this.update_slash_menu(cx)
                     }
                     crate::components::file_editor::EditorEvent::Save => {}
                 }
@@ -493,6 +517,10 @@ impl ComposerView {
             goal_texts: std::collections::HashMap::new(),
             codex_home: crate::agent::codex_home(),
             slash_menu: None,
+            command_catalog: Default::default(),
+            command_panels: command_panels::CommandPanels::new(cx),
+            sketch: sketch::SketchState::default(),
+            slash_scroll: gpui::ScrollHandle::new(),
             toasts: Vec::new(),
             toast_actions: Default::default(),
             next_toast_id: 0,
@@ -601,6 +629,8 @@ impl ComposerView {
     pub fn set_draft_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.prompt_editor
             .update(cx, |editor, cx| editor.set_text_silently(text, cx));
+        self.prompt_context.references.clear();
+        self.update_slash_menu(cx);
         self.draft_revision = self.draft_revision.wrapping_add(1);
         cx.notify();
     }
@@ -668,6 +698,8 @@ impl ComposerView {
             .set_workspace_context(cwd, project_id, thread_id);
         self.sync_thread_scoped_state(cx);
         if changed_cwd {
+            self.command_catalog.invalidate();
+            self.slash_menu = None;
             self.permission_config = None;
             self.load_permission_catalog(cx);
         }
@@ -741,6 +773,20 @@ impl ComposerView {
         cx: &mut Context<Self>,
     ) -> bool {
         match &event {
+            AgentConnectionEvent::Runtime(runtime)
+                if runtime.generation > self.conversation.runtime.generation =>
+            {
+                self.command_catalog.invalidate();
+                self.slash_menu = None;
+            }
+            AgentConnectionEvent::SkillsChanged { generation }
+                if *generation >= self.conversation.runtime.generation =>
+            {
+                self.command_catalog.invalidate();
+                if self.slash_menu_open(cx) {
+                    self.ensure_command_skills(cx);
+                }
+            }
             AgentConnectionEvent::TurnStarted {
                 generation,
                 thread_id,

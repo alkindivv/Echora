@@ -24,11 +24,11 @@ node scripts/scan_reference_rpc_methods.mjs /Applications/ChatGPT.app/Contents/R
 
 | 状态 | 数量 | 判定 |
 |---|---|---|
-| 已接入 | 152 | 表中声明的产品行为已连通协议、领域数据和 UI／副作用；不表示消费全部可选字段 |
+| 已接入 | 153 | 表中声明的产品行为已连通协议、领域数据和 UI／副作用；不表示消费全部可选字段 |
 | 后端已接入 | 5 | 已实现读取或校验，尚无对应可见 UI 调用方或展示 |
 | 部分接入 | 5 | 只支持部分类型、有效变体或限定生命周期窗口 |
 | 兼容退订 | 3 | initialize 按完整方法名退订；不代表对应产品能力已接入 |
-| 未接入 | 97 | 客户端不发送；服务端请求按原 id 回受控回执并保持 generation 与共享连接，同时登记连接级诊断；仅 EOF、崩溃、写失败或致命协议错误终止连接；服务端通知接受但不解码，登记连接级诊断 |
+| 未接入 | 96 | 客户端不发送；服务端请求按原 id 回受控回执并保持 generation 与共享连接，同时登记连接级诊断；仅 EOF、崩溃、写失败或致命协议错误终止连接；服务端通知接受但不解码，登记连接级诊断 |
 
 未接入行的“—”沿用上述规则；带受控回执的服务端请求会另外列出入口，见下段。`tool/requestUserInput` 是兼容别名，不计入本版本 schema 的 252 项。
 
@@ -142,7 +142,7 @@ UI 由真实后端状态驱动：侧边栏账户菜单显示账户标签与套�
 
 Composer 的按钮呈现与激活共用状态判定：运行中有草稿时发送，无草稿时停止；启动、停止与提交等待期间显示忙碌状态且不重复激活，已中断的空输入显示继续。Enter 发送、Shift+Enter 换行。空输入恢复也等待真实 TurnReady 确认，不需要 userMessage 通知。失败快照可显式恢复，自动恢复仅限草稿自发送后未修改且仍为空；已有新草稿时不覆盖。主会话与侧边聊天分别持有草稿、提交和事件流。提交快照只保留在当前应用会话中，不写入后端历史。RPC 已接受但尚未收到 userMessage 时显示接受回执；若轮次此时结束，仍保留回执和快照，并允许显式恢复副本，不把未收到的消息事件伪造到服务端历史，也不自动重发。
 
-运行中是否改为排队由「跟进处理方式」决定，见下节；引导路径与本节行为不变。输入可选 `text_elements` 和图片 `detail` 未设置时按 schema 默认值省略；当前输入入口不增加音频、skill 或 mention 编辑能力。文件上下文仍使用文本包络；其中增加附件类型元数据供历史恢复，属于 input 文本，不增加 RPC 字段。旧混合包络若图片已转换为不透明 URL、无法判断路径类型，则保留原来的图片展示，不猜测额外文件卡。
+运行中是否改为排队由「跟进处理方式」决定，见下节；引导路径与本节行为不变。技能入口将真实 `skills/list` 身份插入编辑器，发送为参考实测的 `[$name](<absolute/SKILL.md>)` 与空 `text_elements`，不重复添加 typed skill。编辑器与队列保留引用范围、名称、路径和显示标签；历史从符合该调用格式的绝对 SKILL.md 链接恢复技能。适配器兼容 schema typed mention 与匹配的 text_elements，但尚无 mention 选择入口；音频与图片 `detail` 不在当前编辑入口。文件上下文仍使用文本包络；其中增加附件类型元数据供历史恢复，属于 input 文本，不增加 RPC 字段。旧混合包络若图片已转换为不透明 URL、无法判断路径类型，则保留原来的图片展示，不猜测额外文件卡。
 
 代码入口：协议位于 [src/agent/codex/](../src/agent/codex/)，领域类型位于 [src/agent/](../src/agent/)，工作区合并位于 [src/workspace.rs](../src/workspace.rs)，会话归约位于 [src/conversation/](../src/conversation/)。方法表的“入口”相对于 `src/agent/codex/`，省略 `.rs`。
 
@@ -177,7 +177,13 @@ Composer 的按钮呈现与激活共用状态判定：运行中有草稿时发�
 
 ### 斜杠菜单与提示
 
-光标前是一个 `/query` 记号时（`/` 位于行首或空白之后，查询从 `/` 到光标，可含空格），输入框上方 8 px 处浮出菜单：与输入框同宽，16 px 圆角、4 px 内边距、最高 320 px；行 28 px、12 px 圆角，未高亮时 75% 不透明。命令按本地化标题字母序排列，输入查询后按标题与 id 的模糊匹配评分排序，未匹配的标题部分变暗（由 id 决定排名时仍按标题的匹配部分变暗，与参考的「Code **review**」一致），无结果时显示「无命令」；查询含空格且没有匹配时菜单自动关闭，以便按原文发送；↑↓（及 Ctrl+N/P）移动、Enter 选择、Esc 关闭直到查询改变，选择后只移除光标前的 `/query` 记号，其余文字保留。本客户端提供「代码审查」（见下文「代码审查」）、「目标」「压缩」（仅已有线程，且输入框只有一行 `/…` 时出现；说明带 `min(last.totalTokens, 上下文窗口) / 上下文窗口` 四舍五入后的百分比，用量未知时省略；运行中选择时显示危险提示「聊天期间无法使用 Compact」）、「计划模式」（仅有 plan 预设时）与「批准」（见上节）；参考的其他命令、`@` 触发与技能分组不在本批范围。成功与危险提示显示在对话区顶部居中，最多叠放 3 条、5 秒后消失，可手动关闭；布局与两种配色（危险提示为红色边框 15%／40%、`#fff0f0`／`#280b0a` 底色与感叹号图标）取自参考的 toast。
+光标前是一个 `/query` 记号时（`/` 位于行首或空白之后，查询从 `/` 到光标，可含空格），输入框上方 8 px 处浮出菜单：同宽、20 px 圆角、4 px 内边距、最高 320 px；行 28.57 px、15 px 圆角，未高亮时 75% 不透明。标题与 id 模糊匹配，↑↓／Ctrl+N/P 移动，Enter／Tab 选择，Escape 关闭并保留输入；IME 组合输入不消费导航。子菜单在终端操作前保留 `/`，选择仅移除当前记号。
+
+本机 Codex 路由提供 MCP 分页状态、代码审查、初始化、反馈、项目／工作树、状态、目标、绘图、聊天、虚拟宠物、计划模式、动态技能；已有线程增加侧边、持久化分支、压缩、归档、新聊天、置顶、重命名。记忆、自动审核批准、模型与推理按对应功能／认证条件显示。模型最近配置按模型、推理强度、速度三元组保存至 UI preferences；不写 Codex 配置。技能目录按 cwd 与 generation 隔离，切换目录或收到失效通知时丢弃旧结果；MCP 遍历 nextCursor 并检测循环。
+
+初始化在后台检查 cwd/AGENTS.md：存在则跳过，否则发送参考的贡献指南提示词；期间输入、cwd 或线程变化会取消后续发送。反馈表单要求分类与详情，诊断日志、聊天文档和浏览器快照按选项传入 `feedback/upload`；成功显示回执，失败或回执缺失明确显示未确认，不自动重发；浏览器快照只含本客户端可读取的标签状态，不包含尚未采集的网络／控制台日志。草图在本机编辑矢量笔迹、形状与文字后导出 PNG；矢量重开限当前会话。虚拟宠物是独立透明浮动窗口。界面关闭或取消不会发送 turn。
+
+参考 bundle 中另外存在由云端、已连接 IDE、独立快捷窗口或 ChatGPT 会话路由注册的命令（包括 cloud/environment、IDE context、share、usage、dictate、read-aloud、lockdown）；当前客户端没有这些路由或对应服务，不能以菜单占位视为已接入。`@` 与「＋」菜单另行验收。
 
 0.158 参考与本机基线的差异（只实现 0.154 schema 已有字段）：通知多出 `emittedAtMs`；`turn/completed` 携带 summary items；`turn/start` 多出 `environments`、`turnTrigger`、`multiAgentMode`、`responsesapiClientMetadata` 等字段；`turn/steer` 多出 `responsesapiClientMetadata`；`thread/queue/changed` 周期性重复下发。
 
@@ -311,7 +317,7 @@ Hook 字段范围：eventName 支持 preToolUse、permissionRequest、postToolUs
 | `externalAgentConfig/import` | 默认 | 未接入 | — | — |
 | `externalAgentConfig/import/readHistories` | 默认 | 未接入 | — | — |
 | `externalAgentConfig/import/recordHistory` | 默认 | 未接入 | — | — |
-| `feedback/upload` | 默认 | 未接入 | — | — |
+| `feedback/upload` | 默认 | 已接入 | 明确提交分类与详情；includeLogs、threadId 和可选 extraLogFiles；仅合法 threadId 回执确认成功，失败或结果未知不自动重发。 | `manager/feedback`、`composer/command_panels` |
 | `fs/copy` | 默认 | 未接入 | — | — |
 | `fs/createDirectory` | 默认 | 未接入 | — | — |
 | `fs/getMetadata` | 默认 | 未接入 | — | — |
@@ -390,12 +396,12 @@ Hook 字段范围：eventName 支持 preToolUse、permissionRequest、postToolUs
 | `thread/compact/start` | 默认 | 已接入 | 手动压缩；composer 的 `/compact` 命令触发，只发送 threadId 并要求响应 result 为对象。压缩按不可 steer 的轮次运行，期间追加输入按 `activeTurnNotSteerable{turnKind:compact}` 如实展示为提交失败，完成经既有 turn／item 事件与 contextCompaction 活动收束。 | `manager/compact`、`components/composer` |
 | `thread/decrement_elicitation` | 实验 | 未接入 | — | — |
 | `thread/delete` | 默认 | 已接入 | 按 threadId 删除；从所有侧栏集合移除。 | `manager/workspace` |
-| `thread/fork` | 默认 | 已接入 | 仅用于临时侧边聊天：ephemeral=true、excludeTurns=true、threadSource=user，携带 cwd、说明及可选 model/effort/serviceTier。验证新 id、ephemeral 和先到的 thread/started；无持久化分叉 UI。 | `manager/side_conversation` |
+| `thread/fork` | 默认 | 已接入 | 临时侧边聊天使用 ephemeral=true、excludeTurns=true、threadSource=user，携带 cwd、说明及可选 model/effort/serviceTier；斜杠分支使用 ephemeral=false、excludeTurns=true（省略响应中的轮次，不丢弃分支历史），可先创建隔离工作树。两者验证新 id、ephemeral 与先到的 thread/started；持久分支成功后刷新工作区。 | `manager/side_conversation`、`manager/fork` |
 | `thread/goal/clear` | 默认 | 已接入 | 按 threadId 清除；用户点击清除或服务端报告新的 complete 后自动调用；返回 cleared 布尔值，缺失即报错。 | `manager/goal`、`goal` |
 | `thread/goal/get` | 默认 | 已接入 | 打开线程时回填目标快照；goal 为 null 或缺省表示无目标；返回的 threadId 必须一致；失败只记录日志。 | `manager/goal`、`goal` |
 | `thread/goal/set` | 默认 | 已接入 | 新目标与「编辑目标」保存都发送 objective + status=active（超过 4000 个字符时 objective 为指向附件文件的一句话）；暂停／恢复只发 status；按 generation 绑定，线程未加载时先 resume；返回的 goal 按 updatedAt 与通知合并。 | `manager/goal`、`goal` |
 | `thread/increment_elicitation` | 实验 | 未接入 | — | — |
-| `thread/inject_items` | 默认 | 已接入 | 向新侧边线程注入 user message，标记父历史仅供参考；不开始 turn。失败时释放临时 fork，不交付可发送的线程。 | `manager/side_conversation` |
+| `thread/inject_items` | 默认 | 已接入 | 向新侧边线程注入 user message，标记父历史仅供参考；不开始 turn。失败时释放临时 fork，不交付可发送的线程。 | `manager/side_conversation`、`manager/fork` |
 | `thread/items/list` | 默认 | 已接入 | 按 threadId、nullable turnId 升序分页；补全非 full 的历史轮次。 | `manager/workspace` |
 | `thread/list` | 默认 | 已接入 | 分页读取最近、归档、项目与分区列表；保留前后游标及 projectId/sectionId 的省略、null、值三态。与参考端一致发送 `useStateDbOnly=true`、空 `modelProviders`／`sourceKinds` 与 null `parentThreadId`：缺省时服务端改走 rollout 扫描，只返回最近 10 个且不带游标，侧栏项目与最近聊天会缺行。 | `manager/workspace` |
 | `thread/loaded/list` | 默认 | 后端已接入 | 打开线程且本连接记录为已加载时，遍历全部分页（最多 64 页，拒绝重复 id、重复游标与畸形页）核对服务端是否仍持有；未列出则丢弃本地记录并 resume，读取失败沿用本地记录。不以它替代 resume，也无可见 UI。 | `manager/loaded_threads` |
@@ -426,7 +432,7 @@ Hook 字段范围：eventName 支持 preToolUse、permissionRequest、postToolUs
 | `thread/timeline/list` | 实验 | 未接入 | — | — |
 | `thread/turns/list` | 默认 | 已接入 | 按 threadId 升序分页，itemsView=full；保留实际 itemsView 和双向游标，按需补取 item。 | `manager/workspace` |
 | `thread/unarchive` | 默认 | 已接入 | 按 threadId 取消归档；读取 result.thread 并刷新列表。 | `manager/workspace` |
-| `thread/unsubscribe` | 默认 | 已接入 | 只关闭本应用创建的临时线程；先请求中断自身轮次，接受 unsubscribed/notSubscribed/notLoaded；不影响父线程。 | `manager/side_conversation` |
+| `thread/unsubscribe` | 默认 | 已接入 | 只关闭本应用创建的临时线程；先请求中断自身轮次，接受 unsubscribed/notSubscribed/notLoaded；不影响父线程。 | `manager/side_conversation`、`manager/fork` |
 | `threadSection/create` | 默认 | 已接入 | name、可选 appearance{icon,color}；返回 section，用于建立 Pinned 分区与「新建分区」（空名保存为「新分区」）。 | `manager/workspace` |
 | `threadSection/delete` | 默认 | 已接入 | 分区菜单「移除分区」发送 `{sectionId}`；服务端把分区内聊天放回无分区，本地同时移除该分区的项目、顺序与折叠记录。 | `manager/workspace`、`workspace/sections` |
 | `threadSection/list` | 默认 | 已接入 | 遍历分区分页；以服务端 Pinned 的稳定 id 实现置顶。 | `manager/workspace` |

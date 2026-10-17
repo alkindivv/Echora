@@ -1,18 +1,6 @@
-//! The composer's slash command menu, for the commands this client supports:
-//! Goal, Compact, Memories, Plan mode and the `/autoreview` Approve submenu.
-//!
-//! As in the reference, the menu opens for a `/query` token that ends at the
-//! caret (a `/` at the start of a line or after whitespace; the query may
-//! contain spaces), lists commands alphabetically by their localized title,
-//! ranks a typed query by fuzzy match on title and id, and closes when a
-//! query with a space matches nothing. Compact needs an otherwise empty
-//! composer: the whole text must be one `/…` line. Selecting a command removes
-//! only the token. Approve only exists while approvable denials do, and opens
-//! a submenu of the newest ten. Memories only exists while the `memories` feature
-//! is enabled, and opens the chat memories dialog. Code review (`/review`)
-//! needs an otherwise empty composer in a repository and opens its own
-//! submenu (see `review.rs`); the token is replaced by `/`, and what is typed
-//! after it filters the submenu until Escape closes the whole menu.
+//! Slash command discovery, availability, filtering and keyboard navigation.
+//! Commands delegate to the catalog, shell, review and native editor workflows.
+//! A submenu retains the slash token until a terminal action is selected.
 
 use std::ops::Range;
 
@@ -31,16 +19,54 @@ pub(crate) enum SlashCommand {
     Goal,
     Memories,
     PlanMode,
+    Model,
+    Reasoning,
+    Local,
+    Init,
+    Mcp,
+    Project,
+    Worktree,
+    Chat,
+    Side,
+    Fork,
+    ForkWorktree,
+    Archive,
+    New,
+    Pin,
+    Rename,
+    Status,
+    Feedback,
+    Sketch,
+    Pet,
+    Skill { index: usize, cycle: u64 },
 }
 
 impl SlashCommand {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 24] = [
         Self::Approve,
         Self::CodeReview,
         Self::Compact,
         Self::Goal,
         Self::Memories,
         Self::PlanMode,
+        Self::Model,
+        Self::Reasoning,
+        Self::Local,
+        Self::Init,
+        Self::Mcp,
+        Self::Project,
+        Self::Worktree,
+        Self::Chat,
+        Self::Side,
+        Self::Fork,
+        Self::Archive,
+        Self::New,
+        Self::Pin,
+        Self::Rename,
+        Self::Status,
+        Self::Feedback,
+        Self::Sketch,
+        Self::Pet,
     ];
 
     fn id(self) -> &'static str {
@@ -51,6 +77,26 @@ impl SlashCommand {
             Self::Goal => "goal",
             Self::Memories => "memories",
             Self::PlanMode => "plan-mode",
+            Self::Model => "model",
+            Self::Reasoning => "reasoning",
+            Self::Local => "local",
+            Self::Init => "init",
+            Self::Mcp => "mcp",
+            Self::Project => "project",
+            Self::Worktree => "worktree",
+            Self::Chat => "chat",
+            Self::Side => "side",
+            Self::Fork | Self::ForkWorktree => "fork",
+            Self::Archive => "archive",
+            Self::New => "new",
+            Self::Pin => "pin",
+            Self::Rename => "rename",
+            Self::Status => "status",
+            Self::Feedback => "feedback",
+            Self::Sketch => "sketch",
+            Self::Pet => "pet",
+
+            Self::Skill { .. } => "",
         }
     }
 
@@ -62,16 +108,53 @@ impl SlashCommand {
             Self::Goal => crate::i18n::format!("目标" => "Goal"),
             Self::Memories => crate::i18n::format!("记忆" => "Memories"),
             Self::PlanMode => crate::i18n::format!("计划模式" => "Plan mode"),
+            Self::Model => crate::i18n::format!("模型"=>"Model"),
+            Self::Reasoning => crate::i18n::format!("推理"=>"Reasoning"),
+            Self::Local => crate::i18n::format!("在本地运行"=>"Run locally"),
+            Self::Init => crate::i18n::format!("初始化" => "Init"),
+            Self::Mcp => "MCP".into(),
+            Self::Project => crate::i18n::format!("在项目中使用 Work" => "Work in a project"),
+            Self::Worktree => crate::i18n::format!("新的工作树" => "New worktree"),
+            Self::Chat => crate::i18n::format!("聊天" => "Chat"),
+            Self::Side => crate::i18n::format!("侧边" => "Side"),
+            Self::Fork | Self::ForkWorktree => crate::i18n::format!("创建聊天分支" => "Fork chat"),
+            Self::Archive => crate::i18n::format!("归档" => "Archive"),
+            Self::New => crate::i18n::format!("新聊天" => "New chat"),
+            Self::Pin => crate::i18n::format!("置顶聊天" => "Pin chat"),
+            Self::Rename => crate::i18n::format!("重命名" => "Rename"),
+            Self::Status => crate::i18n::format!("状态" => "Status"),
+            Self::Feedback => crate::i18n::format!("反馈" => "Feedback"),
+            Self::Sketch => crate::i18n::format!("绘图" => "Sketch"),
+            Self::Pet => crate::i18n::format!("虚拟宠物" => "Pet"),
+            Self::Skill { .. } => crate::i18n::format!("技能" => "Skills"),
         }
     }
 
     fn requires_empty_composer(self) -> bool {
-        matches!(self, Self::Compact | Self::CodeReview)
+        matches!(
+            self,
+            Self::Compact
+                | Self::CodeReview
+                | Self::Init
+                | Self::Fork
+                | Self::Archive
+                | Self::New
+                | Self::Pin
+                | Self::Rename
+        )
     }
 
     /// The row shows a chevron: choosing it opens a submenu.
     pub(crate) fn opens_submenu(self) -> bool {
-        self == Self::CodeReview
+        matches!(
+            self,
+            Self::CodeReview
+                | Self::Mcp
+                | Self::Project
+                | Self::Fork
+                | Self::Model
+                | Self::Reasoning
+        )
     }
 
     pub(crate) fn icon(self) -> &'static str {
@@ -82,6 +165,26 @@ impl SlashCommand {
             Self::Goal => "goal-chip",
             Self::Memories => "slash-memories",
             Self::PlanMode => "slash-plan-mode",
+            Self::Model => "model-reset",
+            Self::Reasoning => "slash-plan-mode",
+            Self::Local => "local",
+            Self::Init => "command-init",
+            Self::Mcp => "command-mcp",
+            Self::Project => "utility-folder",
+            Self::Worktree => "project-worktree",
+            Self::Chat => "command-chat",
+            Self::Side => "side-chat",
+            Self::Fork | Self::ForkWorktree => "project-worktree",
+            Self::Archive => "archive",
+            Self::New => "new-chat",
+            Self::Pin => "pin",
+            Self::Rename => "project-marker-pencil",
+            Self::Status => "command-status",
+            Self::Feedback => "command-feedback",
+            Self::Sketch => "command-sketch",
+            Self::Pet => "command-pet",
+
+            Self::Skill { .. } => "skill-cube",
         }
     }
 }
@@ -110,13 +213,18 @@ pub(crate) struct SlashMenu {
     pub(crate) denials: bool,
     /// The Code review submenu is showing.
     pub(crate) review: bool,
+    pub(crate) mcp: bool,
+    pub(crate) project: bool,
+    pub(crate) fork: bool,
+    pub(crate) models: bool,
+    pub(crate) reasoning: bool,
     /// Escape closes the menu until the query changes.
     dismissed: Option<String>,
 }
 
 /// Matches `query` as a subsequence of `text` (case-insensitive) and scores
 /// it: a prefix beats a contiguous match, which beats a scattered one.
-fn fuzzy(text: &str, query: &str) -> Option<(u32, Vec<Range<usize>>)> {
+pub(super) fn fuzzy(text: &str, query: &str) -> Option<(u32, Vec<Range<usize>>)> {
     if query.is_empty() {
         return Some((1, Vec::new()));
     }
@@ -162,7 +270,7 @@ fn collapse_repeats(query: &str) -> String {
 /// The `/query` token that ends at `caret`: the nearest `/` on the caret's
 /// line that starts the line or follows whitespace. Returns the token's byte
 /// range (from the `/` to the caret).
-fn slash_token(text: &str, caret: usize) -> Option<Range<usize>> {
+pub(super) fn token_range(text: &str, caret: usize) -> Option<Range<usize>> {
     let caret = caret.min(text.len());
     if !text.is_char_boundary(caret) {
         return None;
@@ -189,9 +297,9 @@ fn composer_is_only_token(text: &str) -> bool {
 
 impl ComposerView {
     /// The `/query` token at the caret, with its lowercased query.
-    fn slash_token(&self, cx: &gpui::App) -> Option<(Range<usize>, String)> {
+    pub(super) fn slash_token(&self, cx: &gpui::App) -> Option<(Range<usize>, String)> {
         let editor = self.prompt_editor.read(cx);
-        let range = slash_token(editor.text(), editor.cursor())?;
+        let range = token_range(editor.text(), editor.cursor())?;
         let query = editor.text()[range.start + 1..range.end].to_lowercase();
         Some((range, query))
     }
@@ -211,6 +319,47 @@ impl ComposerView {
             SlashCommand::Goal => !self.side_chat,
             SlashCommand::Memories => !self.side_chat && self.memories_feature_enabled(),
             SlashCommand::PlanMode => self.plan_mode_available(),
+            SlashCommand::Model | SlashCommand::Reasoning => self.command_model_available(),
+            SlashCommand::Local => {
+                !self.side_chat
+                    && self.thread_id().is_none()
+                    && self.workspace_controls.worktree_mode
+            }
+            SlashCommand::Init => {
+                !self.side_chat
+                    && !self.is_running()
+                    && !self.goal_draft
+                    && self.conversation.cwd != std::path::Path::new("/")
+            }
+            SlashCommand::Fork | SlashCommand::ForkWorktree => {
+                !self.side_chat && self.thread_id().is_some() && !self.command_catalog.fork_loading
+            }
+            SlashCommand::Side
+            | SlashCommand::Archive
+            | SlashCommand::New
+            | SlashCommand::Pin
+            | SlashCommand::Rename => !self.side_chat && self.thread_id().is_some(),
+            SlashCommand::Status
+            | SlashCommand::Feedback
+            | SlashCommand::Sketch
+            | SlashCommand::Pet => true,
+            SlashCommand::Mcp => true,
+            SlashCommand::Project => !self.side_chat && self.thread_id().is_none(),
+            SlashCommand::Worktree => {
+                !self.side_chat
+                    && self.thread_id().is_none()
+                    && self
+                        .workspace
+                        .checkout
+                        .as_ref()
+                        .is_some_and(crate::git_review::Checkout::is_repository)
+            }
+            SlashCommand::Chat => {
+                !self.side_chat
+                    && self.thread_id().is_none()
+                    && self.conversation.project_id.is_some()
+            }
+            SlashCommand::Skill { .. } => true,
         }
     }
 
@@ -220,7 +369,7 @@ impl ComposerView {
                 crate::i18n::format!("批准最近一次自动审查驳回" => "Approve a recent auto-review denial")
             }
             SlashCommand::CodeReview => crate::i18n::format!(
-                "审查未提交的更改，或与某个分支比较" => "Review uncommitted changes or compare against a branch"
+                "审查未提交的更改，或与某个分支进行比较" => "Review uncommitted changes or compare against a branch"
             ),
             SlashCommand::Compact => match self.context_usage_percent() {
                 Some(usage) => crate::i18n::format!(
@@ -232,7 +381,61 @@ impl ComposerView {
                 crate::i18n::format!("设置要持续追求的目标" => "Set a goal to keep pursuing")
             }
             // The reference's row has a title only.
-            SlashCommand::Memories => String::new(),
+            SlashCommand::Memories | SlashCommand::Model => String::new(),
+            SlashCommand::Reasoning => self.selected_effort_label(),
+            SlashCommand::Local => {
+                crate::i18n::format!("在本地运行此聊天"=>"Run this chat locally")
+            }
+            SlashCommand::Init => {
+                crate::i18n::format!("创建包含 Codex 指令的 AGENTS.md 文件" => "Create an AGENTS.md file with instructions for Codex")
+            }
+            SlashCommand::Mcp => {
+                crate::i18n::format!("显示 MCP 服务器状态" => "Show MCP server status")
+            }
+            SlashCommand::Project => {
+                crate::i18n::format!("为新聊天选择项目" => "Choose a project for a new chat")
+            }
+            SlashCommand::Worktree => {
+                if self.workspace_controls.worktree_mode {
+                    crate::i18n::format!("关闭工作树模式" => "Turn worktree mode off")
+                } else {
+                    crate::i18n::format!("在新的工作树中运行此聊天" => "Run this chat in a new worktree")
+                }
+            }
+            SlashCommand::Chat => {
+                crate::i18n::format!("不要在项目中工作" => "Don't work in a project")
+            }
+            SlashCommand::Side => {
+                crate::i18n::format!("发起临时侧边聊天" => "Start a temporary side chat")
+            }
+            SlashCommand::Fork | SlashCommand::ForkWorktree => {
+                crate::i18n::format!("在当前工作空间或新工作树中创建此聊天的分支" => "Fork this chat in the current workspace or a new worktree")
+            }
+            SlashCommand::Archive => {
+                crate::i18n::format!("归档当前聊天" => "Archive the current chat")
+            }
+            SlashCommand::New => {
+                crate::i18n::format!("在同一工作空间中开启空白聊天" => "Start a new chat")
+            }
+            SlashCommand::Pin => {
+                crate::i18n::format!("将此聊天保留在侧边栏" => "Keep this chat in the sidebar")
+            }
+            SlashCommand::Rename => {
+                crate::i18n::format!("重命名当前聊天" => "Rename the current chat")
+            }
+            SlashCommand::Status => {
+                crate::i18n::format!("显示聊天 ID、上下文用量和速率限制" => "Show current chat status and usage")
+            }
+            SlashCommand::Feedback => {
+                crate::i18n::format!("发送有关此聊天的反馈" => "Send feedback")
+            }
+            SlashCommand::Sketch => {
+                crate::i18n::format!("绘制草图" => "Draw and attach a sketch")
+            }
+            SlashCommand::Pet => {
+                crate::i18n::format!("唤醒或收起桌面虚拟宠物" => "Toggle the desktop pet")
+            }
+            SlashCommand::Skill { .. } => String::new(),
             SlashCommand::PlanMode => {
                 if self.prompt_context.plan_mode == Some(true) {
                     crate::i18n::format!("关闭计划模式" => "Turn plan mode off")
@@ -245,7 +448,7 @@ impl ComposerView {
 
     /// The share of the model context the last turn used, as the reference
     /// computes it: `min(last.totalTokens, window) / window`, rounded.
-    fn context_usage_percent(&self) -> Option<i64> {
+    pub(super) fn context_usage_percent(&self) -> Option<i64> {
         let usage = self
             .conversation
             .thread_token_usages
@@ -266,7 +469,17 @@ impl ComposerView {
             .filter(|command| self.command_available(*command))
             .filter(|command| only_token || !command.requires_empty_composer())
             .filter_map(|command| {
-                let title = command.title();
+                let title = if command == SlashCommand::Worktree {
+                    let project = self
+                        .workspace
+                        .project_label
+                        .as_ref()
+                        .map(|s| s.as_ref())
+                        .unwrap_or("");
+                    crate::i18n::format!("新的 {project} 工作树" => "New {project} worktree")
+                } else {
+                    command.title()
+                };
                 let query = if command == SlashCommand::Goal {
                     collapse_repeats(&query)
                 } else {
@@ -300,7 +513,9 @@ impl ComposerView {
         items.sort_by(|(a_score, a), (b_score, b)| {
             b_score.cmp(a_score).then_with(|| a.title.cmp(&b.title))
         });
-        items.into_iter().map(|(_, item)| item).collect()
+        let mut items: Vec<_> = items.into_iter().map(|(_, item)| item).collect();
+        items.extend(self.command_skill_items(&query));
+        items
     }
 
     pub(crate) fn denial_items(&self) -> Vec<DenialItem> {
@@ -344,8 +559,28 @@ impl ComposerView {
         }
         menu.denials
             || menu.review
+            || menu.mcp
+            || menu.project
+            || menu.fork
+            || menu.models
+            || menu.reasoning
             || !query.contains(char::is_whitespace)
             || !self.slash_items(cx).is_empty()
+    }
+
+    pub(super) fn dismiss_slash_menu(&mut self, cx: &mut Context<Self>) {
+        let query = self.slash_query(cx);
+        if let Some(menu) = &mut self.slash_menu {
+            menu.review = false;
+            menu.denials = false;
+            menu.mcp = false;
+            menu.project = false;
+            menu.fork = false;
+            menu.models = false;
+            menu.reasoning = false;
+            menu.dismissed = query;
+        }
+        cx.notify();
     }
 
     /// Removes the `/query` token, leaving the rest of the composer text.
@@ -365,6 +600,7 @@ impl ComposerView {
         };
         if self.slash_menu.is_none() {
             self.ensure_memories_feature(cx);
+            self.ensure_command_skills(cx);
         }
         let menu = self.slash_menu.get_or_insert_with(SlashMenu::default);
         if menu
@@ -385,6 +621,10 @@ impl ComposerView {
         match &self.slash_menu {
             Some(menu) if menu.denials => self.denial_items().len(),
             Some(menu) if menu.review => self.review_rows(cx).len(),
+            Some(menu) if menu.mcp => 0,
+            Some(menu) if menu.models || menu.reasoning => self.command_model_rows(cx).len(),
+            Some(menu) if menu.fork => self.command_fork_rows(cx).len(),
+            Some(menu) if menu.project => self.command_project_rows(cx).len(),
             _ => self.slash_items(cx).len(),
         }
     }
@@ -392,7 +632,7 @@ impl ComposerView {
     /// Up/Down/Enter/Escape while the menu shows. Returns whether the key
     /// was the menu's.
     pub(super) fn slash_menu_key(&mut self, key: &str, ctrl: bool, cx: &mut Context<Self>) -> bool {
-        if !self.slash_menu_open(cx) {
+        if self.prompt_editor.read(cx).composing() || !self.slash_menu_open(cx) {
             return false;
         }
         let count = self.slash_row_count(cx);
@@ -407,6 +647,9 @@ impl ComposerView {
             ("up", false) | ("p", true) if count > 0 => {
                 menu.highlighted = (menu.highlighted + count - 1) % count;
             }
+            ("tab", false) => {
+                return self.slash_menu_enter(cx);
+            }
             ("escape", false) => {
                 if menu.denials {
                     menu.denials = false;
@@ -415,13 +658,45 @@ impl ComposerView {
                     // As the reference, Escape in the review submenu closes
                     // the whole menu and leaves its `/` in the composer.
                     menu.review = false;
+                    menu.mcp = false;
+                    menu.project = false;
+                    menu.fork = false;
+                    menu.models = false;
+                    menu.reasoning = false;
                     menu.dismissed = query;
                 }
             }
             _ => return false,
         }
+        let highlighted = menu.highlighted;
+        if count > 0 {
+            self.slash_scroll
+                .scroll_to_item(self.slash_scroll_index(highlighted, cx));
+        }
         cx.notify();
         true
+    }
+
+    fn slash_scroll_index(&self, index: usize, cx: &gpui::App) -> usize {
+        match self.slash_menu.as_ref() {
+            Some(menu) if menu.denials => index + 1,
+            Some(menu) if menu.review => index + usize::from(index > 0),
+            Some(menu) if menu.project => {
+                index
+                    + usize::from(self.project_picker.loading)
+                    + usize::from(self.project_picker.error.is_some())
+            }
+            Some(menu) if menu.models => index + 1,
+            Some(menu) if menu.mcp || menu.fork || menu.reasoning => index,
+            _ => {
+                index
+                    + usize::from(
+                        self.slash_items(cx)
+                            .get(index)
+                            .is_some_and(|item| matches!(item.command, SlashCommand::Skill { .. })),
+                    )
+            }
+        }
     }
 
     /// Enter on the menu. Returns whether the menu took it.
@@ -432,7 +707,16 @@ impl ComposerView {
         let Some(menu) = self.slash_menu.clone() else {
             return false;
         };
-        if menu.denials {
+        if menu.mcp {
+            return true;
+        }
+        if menu.models || menu.reasoning {
+            self.select_command_model(menu.highlighted, cx);
+        } else if menu.fork {
+            self.select_command_fork(menu.highlighted, cx);
+        } else if menu.project {
+            self.select_command_project(menu.highlighted, cx);
+        } else if menu.denials {
             self.select_denial(menu.highlighted, cx);
         } else if menu.review {
             self.select_review_row(menu.highlighted, cx);
@@ -447,6 +731,12 @@ impl ComposerView {
 
     /// Runs a command. The `/query` text is removed first.
     pub(crate) fn select_slash_command(&mut self, command: SlashCommand, cx: &mut Context<Self>) {
+        if !self.command_available(command) {
+            return;
+        }
+        if self.select_catalog_command(command, cx) {
+            return;
+        }
         if command == SlashCommand::Approve {
             if let Some(menu) = self.slash_menu.as_mut() {
                 menu.denials = true;
@@ -495,7 +785,37 @@ impl ComposerView {
                 self.focus_prompt_pending = true;
             }
             SlashCommand::Memories => self.open_memories_dialog(cx),
-            SlashCommand::Approve | SlashCommand::CodeReview => {
+            SlashCommand::Side
+            | SlashCommand::Fork
+            | SlashCommand::ForkWorktree
+            | SlashCommand::Archive
+            | SlashCommand::New
+            | SlashCommand::Pin
+            | SlashCommand::Rename => cx.emit(super::SlashChatAction(command)),
+            SlashCommand::Status => self.open_command_status(cx),
+            SlashCommand::Feedback => self.open_command_feedback(cx),
+            SlashCommand::Sketch => self.open_sketch(cx),
+            SlashCommand::Pet => self.toggle_pet(cx),
+            SlashCommand::Local => {
+                self.select_run_location(false, cx);
+                self.focus_prompt_pending = true;
+            }
+            SlashCommand::Worktree => {
+                self.select_run_location(!self.workspace_controls.worktree_mode, cx);
+                self.focus_prompt_pending = true;
+            }
+            SlashCommand::Chat => {
+                cx.emit(super::DraftProjectSelected(None));
+                self.focus_prompt_pending = true;
+            }
+            SlashCommand::Approve
+            | SlashCommand::CodeReview
+            | SlashCommand::Init
+            | SlashCommand::Mcp
+            | SlashCommand::Project
+            | SlashCommand::Model
+            | SlashCommand::Reasoning
+            | SlashCommand::Skill { .. } => {
                 unreachable!("opens its submenu above")
             }
         }
@@ -530,7 +850,7 @@ impl ComposerView {
 
 #[cfg(test)]
 mod tests {
-    use super::{collapse_repeats, composer_is_only_token, fuzzy, slash_token};
+    use super::{collapse_repeats, composer_is_only_token, fuzzy, token_range as slash_token};
 
     #[test]
     fn the_token_starts_at_a_line_start_or_after_whitespace_and_ends_at_the_caret() {

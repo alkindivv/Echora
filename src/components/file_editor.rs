@@ -58,12 +58,14 @@ pub fn init(cx: &mut App) {
 #[derive(Clone)]
 struct Snapshot {
     text: String,
+    references: Vec<crate::agent::AgentInputReference>,
     anchor: usize,
     cursor: usize,
 }
 #[derive(Default)]
 pub struct Buffer {
     pub text: String,
+    references: Vec<crate::agent::AgentInputReference>,
     anchor: usize,
     cursor: usize,
     undo: Vec<Snapshot>,
@@ -73,15 +75,26 @@ impl Buffer {
     fn selection(&self) -> Range<usize> {
         self.anchor.min(self.cursor)..self.anchor.max(self.cursor)
     }
+    fn snap_reference(&self, offset: usize, forward: bool) -> usize {
+        self.references
+            .iter()
+            .find(|r| r.range.start < offset && offset < r.range.end)
+            .map_or(
+                offset,
+                |r| if forward { r.range.end } else { r.range.start },
+            )
+    }
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             text: self.text.clone(),
+            references: self.references.clone(),
             anchor: self.anchor,
             cursor: self.cursor,
         }
     }
     fn restore(&mut self, s: Snapshot) {
         self.text = s.text;
+        self.references = s.references;
         self.anchor = s.anchor;
         self.cursor = s.cursor;
     }
@@ -96,6 +109,25 @@ impl Buffer {
                 self.undo.remove(0);
             }
         }
+        let mut range = range;
+        // An inline reference is one editing unit, including replacements made
+        // by native IME and selection APIs. Never retain half a reference.
+        for reference in &self.references {
+            if range.start < reference.range.end && range.end > reference.range.start {
+                range.start = range.start.min(reference.range.start);
+                range.end = range.end.max(reference.range.end);
+            }
+        }
+        self.references.retain_mut(|reference| {
+            if reference.range.start < range.end && reference.range.end > range.start {
+                return false;
+            }
+            if reference.range.start >= range.end {
+                reference.range.start = reference.range.start - range.len() + text.len();
+                reference.range.end = reference.range.end - range.len() + text.len();
+            }
+            true
+        });
         self.text.replace_range(range.clone(), text);
         self.cursor = range.start + text.len();
         self.anchor = self.cursor;
@@ -144,6 +176,7 @@ fn next(text: &str, offset: usize) -> usize {
 
 pub enum EditorEvent {
     Changed,
+    SelectionChanged,
     Save,
     Submit,
     /// ⌘⏎ in a composer: send with the opposite follow-up behavior.
@@ -335,6 +368,50 @@ impl FileEditor {
         self.buffer.replace(range, text, true);
         self.changed(cx);
     }
+    pub fn references(&self) -> &[crate::agent::AgentInputReference] {
+        &self.buffer.references
+    }
+
+    pub fn set_references(
+        &mut self,
+        references: Vec<crate::agent::AgentInputReference>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut end = 0;
+        self.buffer.references = references
+            .into_iter()
+            .filter(|r| {
+                r.range.start < r.range.end
+                    && r.range.start >= end
+                    && self.buffer.text.get(r.range.clone()) == Some(r.label.as_str())
+                    && {
+                        end = r.range.end;
+                        true
+                    }
+            })
+            .collect();
+        self.layout_dirty = true;
+        cx.notify();
+    }
+
+    pub fn insert_reference(
+        &mut self,
+        range: Range<usize>,
+        mut reference: crate::agent::AgentInputReference,
+        cx: &mut Context<Self>,
+    ) {
+        if self.read_only || self.buffer.text.get(range.clone()).is_none() || self.composing() {
+            return;
+        }
+        let start = range.start;
+        self.buffer
+            .replace(range, &format!("{} ", reference.label), true);
+        reference.range = start..start + reference.label.len();
+        self.buffer.references.push(reference);
+        self.buffer.references.sort_by_key(|r| r.range.start);
+        self.changed(cx);
+    }
+
     fn line_height(&self) -> f32 {
         if let Some((_, line_height)) = self.metrics {
             return line_height;
@@ -469,8 +546,69 @@ impl FileEditor {
     fn copy(&self, cx: &mut Context<Self>) {
         let range = self.buffer.selection();
         if !range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.buffer.text[range].into()));
+            let references = self
+                .buffer
+                .references
+                .iter()
+                .filter(|r| r.range.start >= range.start && r.range.end <= range.end)
+                .cloned()
+                .map(|mut r| {
+                    r.range.start -= range.start;
+                    r.range.end -= range.start;
+                    r
+                })
+                .collect::<Vec<_>>();
+            let metadata = serde_json::json!({"echoraInlineReferences":references});
+            cx.write_to_clipboard(ClipboardItem::new_string_with_json_metadata(
+                self.buffer.text[range].into(),
+                metadata,
+            ));
         }
+    }
+    fn paste(&mut self, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        let Some(text) = item.text() else {
+            return;
+        };
+        let text = text.replace("\r\n", "\n");
+        let references = item
+            .metadata()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.get("echoraInlineReferences").cloned())
+            .and_then(|v| serde_json::from_value::<Vec<crate::agent::AgentInputReference>>(v).ok())
+            .unwrap_or_default();
+        let start = self.buffer.selection().start;
+        self.replace(&text, cx);
+        if self.buffer.text.get(start..start + text.len()) != Some(&text) {
+            return;
+        }
+        for mut reference in references {
+            if reference.range.start >= reference.range.end
+                || text.get(reference.range.clone()) != Some(reference.label.as_str())
+                || reference.name.is_empty()
+                || reference.path.is_empty()
+            {
+                continue;
+            }
+            reference.range.start += start;
+            reference.range.end += start;
+            if self
+                .buffer
+                .references
+                .iter()
+                .any(|r| r.range.start < reference.range.end && r.range.end > reference.range.start)
+            {
+                continue;
+            }
+            self.buffer.references.push(reference);
+        }
+        self.buffer.references.sort_by_key(|r| r.range.start);
+        self.changed(cx);
     }
     fn delete(&mut self, back: bool, cx: &mut Context<Self>) {
         self.last_input = None;
@@ -490,6 +628,18 @@ impl FileEditor {
     }
     fn move_to(&mut self, offset: usize, select: bool, cx: &mut Context<Self>) {
         self.last_input = None;
+        let offset = self
+            .buffer
+            .references
+            .iter()
+            .find(|r| r.range.start < offset && offset < r.range.end)
+            .map_or(offset, |r| {
+                if offset < self.buffer.cursor {
+                    r.range.start
+                } else {
+                    r.range.end
+                }
+            });
         self.buffer.cursor = offset;
         if !select {
             self.buffer.anchor = offset;
@@ -497,6 +647,7 @@ impl FileEditor {
         self.ensure_cursor = true;
         self.marked = None;
         self.reset_caret_blink();
+        cx.emit(EditorEvent::SelectionChanged);
         cx.notify();
     }
     fn row_for(&self, offset: usize) -> usize {
@@ -701,6 +852,15 @@ impl FileEditor {
                         run.font.family = UI_MONOSPACE_FONT_FAMILY.into();
                         run.font.weight = gpui::FontWeight::MEDIUM;
                         run.color = theme.text_tertiary.into();
+                    }
+                    if self
+                        .buffer
+                        .references
+                        .iter()
+                        .any(|r| r.range.contains(&start))
+                    {
+                        run.color = gpui::rgba(0x339cffff).into();
+                        run.font.weight = gpui::FontWeight::MEDIUM;
                     }
                     run.len = expanded.len();
                     if self
@@ -967,9 +1127,7 @@ impl Render for FileEditor {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|s, _: &EditorPaste, _, cx| {
-                if let Some(t) = cx.read_from_clipboard().and_then(|v| v.text()) {
-                    s.replace(&t.replace("\r\n", "\n"), cx);
-                }
+                s.paste(cx);
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|s, _: &EditorSelectAll, _, cx| {
@@ -1045,7 +1203,8 @@ impl Render for FileEditor {
                 cx.listener(|s, e: &gpui::MouseDownEvent, w, cx| {
                     s.focus.focus(w, cx);
                     s.reset_caret_blink();
-                    let p = s.offset_at(e.position);
+                    let raw = s.offset_at(e.position);
+                    let p = s.buffer.snap_reference(raw, raw >= s.buffer.cursor);
                     if !e.modifiers.shift {
                         s.buffer.anchor = p;
                     }
@@ -1083,6 +1242,9 @@ impl Render for FileEditor {
                         s.buffer.anchor = a;
                         s.buffer.cursor = b;
                     }
+                    s.buffer.anchor = s.buffer.snap_reference(s.buffer.anchor, false);
+                    s.buffer.cursor = s.buffer.snap_reference(s.buffer.cursor, true);
+                    cx.emit(EditorEvent::SelectionChanged);
                     cx.stop_propagation();
                     cx.notify();
                 }),
@@ -1096,7 +1258,9 @@ impl Render for FileEditor {
                             s.scroll += s.line_height();
                         }
                     }
-                    s.buffer.cursor = s.offset_at(e.position);
+                    let raw = s.offset_at(e.position);
+                    s.buffer.cursor = s.buffer.snap_reference(raw, raw >= s.buffer.anchor);
+                    cx.emit(EditorEvent::SelectionChanged);
                     cx.notify();
                 }
             }))
@@ -1514,5 +1678,52 @@ mod tests {
         b.replace(0..0, "b", true);
         b.redo();
         assert_eq!(b.text, "b");
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    use crate::agent::{AgentInputReference, AgentInputReferenceKind};
+    fn buffer() -> Buffer {
+        Buffer {
+            text: "你好 OpenAI Docs 后文".into(),
+            references: vec![AgentInputReference {
+                range: 7..18,
+                name: "openai-docs".into(),
+                path: "/skills/OpenAI Docs/SKILL.md".into(),
+                label: "OpenAI Docs".into(),
+                kind: AgentInputReferenceKind::Skill,
+            }],
+            anchor: 7,
+            cursor: 18,
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn deleting_part_of_a_chip_removes_it_atomically_and_undo_restores_identity() {
+        let mut b = buffer();
+        b.replace(10..11, "", true);
+        assert_eq!(b.text, "你好  后文");
+        assert!(b.references.is_empty());
+        b.undo();
+        assert_eq!(b.text, "你好 OpenAI Docs 后文");
+        assert_eq!(b.references[0].path, "/skills/OpenAI Docs/SKILL.md");
+        b.redo();
+        assert!(b.references.is_empty());
+    }
+    #[test]
+    fn typing_before_and_after_a_chip_moves_only_the_appropriate_utf8_ranges() {
+        let mut b = buffer();
+        b.replace(0..0, "👋", true);
+        assert_eq!(b.references[0].range, 11..22);
+        b.replace(22..22, "!", true);
+        assert_eq!(b.references[0].range, 11..22);
+        assert_eq!(&b.text[b.references[0].range.clone()], "OpenAI Docs");
+        assert_eq!(b.snap_reference(15, false), 11);
+        assert_eq!(b.snap_reference(15, true), 22);
+        b.replace(15..15, "x", true);
+        assert!(b.references.is_empty());
+        assert_eq!(b.text, "👋你好 x! 后文");
     }
 }

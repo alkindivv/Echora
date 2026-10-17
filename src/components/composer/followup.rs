@@ -49,6 +49,7 @@ pub(super) fn row_input(
         submission.text.clone(),
         AgentPromptContext {
             files,
+            references: submission.references.clone(),
             plan_mode: None,
             memory: None,
         },

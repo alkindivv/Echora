@@ -224,7 +224,7 @@ impl ComposerView {
         } else {
             crate::i18n::format!(
                 "{}\n\n请处理以下审查评论：\n\n{}" => "{}\n\nPlease address these review comments:\n\n{}",
-                prompt.trim(),
+                prompt,
                 crate::git_review::comments_prompt(&self.review_comments)
             )
         };
@@ -242,6 +242,7 @@ impl ComposerView {
                 self.draft_revision = self.draft_revision.wrapping_add(1);
                 self.clear_prompt(cx);
                 self.prompt_context.files.clear();
+                self.prompt_context.references.clear();
                 self.context_menu_open = false;
                 if !self.review_comments.is_empty() {
                     self.review_comments.clear();
@@ -287,6 +288,7 @@ impl ComposerView {
         self.model_list_open = false;
         self.clear_prompt(cx);
         self.prompt_context.files.clear();
+        self.prompt_context.references.clear();
         self.context_menu_open = false;
         if !self.review_comments.is_empty() {
             self.review_comments.clear();
@@ -396,6 +398,9 @@ impl ComposerView {
     ) {
         self.prompt_editor
             .update(cx, |editor, cx| editor.set_text_silently(&draft.text, cx));
+        self.prompt_editor.update(cx, |editor, cx| {
+            editor.set_references(draft.context.references.clone(), cx)
+        });
         self.prompt_context = draft.context;
         self.review_comments = draft.comments;
         if !self.review_comments.is_empty() {

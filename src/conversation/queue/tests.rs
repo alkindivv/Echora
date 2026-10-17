@@ -3,6 +3,7 @@ use crate::agent::{AgentQueuedSubmission, AgentThreadQueue};
 
 fn submission(id: &str) -> AgentQueuedSubmission {
     AgentQueuedSubmission {
+        references: Vec::new(),
         id: id.into(),
         client_message_id: format!("client-{id}"),
         text: id.into(),

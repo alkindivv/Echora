@@ -14,6 +14,7 @@ pub struct AgentQueuedSubmission {
     /// Display text with any attachment envelope removed.
     pub text: String,
     pub attachments: Vec<UserMessageAttachment>,
+    pub references: Vec<super::AgentInputReference>,
 }
 
 /// The complete queue of one thread as read in one generation.

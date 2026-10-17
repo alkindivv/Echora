@@ -23,11 +23,18 @@ use crate::{
     workspace::ReviewDelivery,
 };
 
+type SkillReply = async_channel::Sender<
+    Result<crate::agent::AgentSkillsSnapshot, crate::agent::AgentSkillsError>,
+>;
+type McpReply =
+    async_channel::Sender<Result<crate::agent::AgentMcpServerPage, crate::agent::AgentMcpError>>;
 type Reply<T> = async_channel::Sender<Result<T, String>>;
 
 #[derive(Default)]
 struct Script {
     log: Vec<String>,
+    skills: Vec<(crate::agent::AgentSkillsLoadRequest, SkillReply)>,
+    mcp: Vec<(crate::agent::AgentMcpServerStatusRequest, McpReply)>,
     reviews: Vec<(AgentReviewRequest, async_channel::Sender<AgentEvent>)>,
     shells: Vec<(AgentShellCommandRequest, Reply<AgentShellCommandStarted>)>,
     server_turn: Option<(String, AgentRun)>,
@@ -55,6 +62,27 @@ impl Backend {
 }
 
 impl AgentBackend for Backend {
+    fn load_skills(
+        &self,
+        request: crate::agent::AgentSkillsLoadRequest,
+    ) -> async_channel::Receiver<
+        Result<crate::agent::AgentSkillsSnapshot, crate::agent::AgentSkillsError>,
+    > {
+        let (sender, receiver) = async_channel::bounded(1);
+        self.script.lock().unwrap().skills.push((request, sender));
+        receiver
+    }
+    fn list_mcp_servers(
+        &self,
+        request: crate::agent::AgentMcpServerStatusRequest,
+    ) -> async_channel::Receiver<
+        Result<crate::agent::AgentMcpServerPage, crate::agent::AgentMcpError>,
+    > {
+        let (sender, receiver) = async_channel::bounded(1);
+        self.script.lock().unwrap().mcp.push((request, sender));
+        receiver
+    }
+
     fn subscribe_connection_events(&self) -> async_channel::Receiver<AgentConnectionEvent> {
         self.events.clone()
     }
@@ -251,7 +279,7 @@ fn code_review_needs_a_repository_an_empty_composer_and_no_side_chat() {
     });
     assert_eq!(titles, ["代码审查"]);
     let description = f.with(|c, cx| c.slash_items(cx)[0].description.clone());
-    assert_eq!(description, "审查未提交的更改，或与某个分支比较");
+    assert_eq!(description, "审查未提交的更改，或与某个分支进行比较");
     // Other text in the composer hides it, as the reference requires an
     // empty composer.
     f.type_text("fix this /rev");
@@ -640,4 +668,239 @@ fn shell_mode_shows_its_sandbox_warning_while_the_line_starts_with_a_bang(
     assert!(visual.debug_bounds("COMPOSER_SHELL_MODE").is_none());
     set(&mut visual, "!git status");
     assert!(visual.debug_bounds("COMPOSER_SHELL_MODE").is_some());
+}
+
+fn command_skill(name: &str, enabled: bool) -> crate::agent::AgentSkill {
+    crate::agent::AgentSkill {
+        name: name.into(),
+        description: "文档工具".into(),
+        path: format!("/skills/{name}/SKILL.md").into(),
+        scope: crate::agent::AgentSkillScope::Repo,
+        enabled,
+        short_description: None,
+        plugin_id: None,
+        interface: Some(crate::agent::AgentSkillInterface {
+            display_name: Some(format!("工具 {name}")),
+            ..Default::default()
+        }),
+        dependencies: None,
+        extra: Default::default(),
+    }
+}
+fn command_skills(
+    cwd: PathBuf,
+    skills: Vec<crate::agent::AgentSkill>,
+) -> crate::agent::AgentSkillsSnapshot {
+    crate::agent::AgentSkillsSnapshot {
+        generation: 1,
+        entries: vec![crate::agent::AgentSkillsEntry {
+            cwd,
+            skills,
+            errors: Vec::new(),
+            extra: Default::default(),
+        }],
+        next_cursor: None,
+        extra: Default::default(),
+    }
+}
+#[test]
+fn command_skills_discard_stale_cwd_results_and_insert_the_selected_identity() {
+    let mut f = Fixture::new(None);
+    f.type_text("/");
+    let (request, old) = f.backend.script.lock().unwrap().skills.remove(0);
+    assert_eq!(request.cwds, [PathBuf::from("/tmp/repo")]);
+    f.with(|c, cx| c.set_workspace_context("/tmp/other".into(), Some("other".into()), None, cx));
+    f.type_text("/工具");
+    let (_, current) = f.backend.script.lock().unwrap().skills.remove(0);
+    old.send_blocking(Ok(command_skills(
+        "/tmp/repo".into(),
+        vec![command_skill("stale", true)],
+    )))
+    .unwrap();
+    f.settle();
+    assert!(f.with(|c, _| c.command_catalog.skills.is_empty()));
+    current
+        .send_blocking(Ok(command_skills(
+            "/tmp/other".into(),
+            vec![
+                command_skill("chosen", true),
+                command_skill("disabled", false),
+            ],
+        )))
+        .unwrap();
+    f.settle();
+    f.with(|c, cx| {
+        let items = c.slash_items(cx);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "工具 chosen");
+        assert!(c.slash_menu_key("tab", false, cx));
+        assert_eq!(c.prompt_text(cx), "工具 chosen ");
+        assert_eq!(c.prompt_context.references[0].name, "chosen");
+        assert_eq!(
+            c.prompt_context.references[0].path,
+            "/skills/chosen/SKILL.md"
+        );
+    });
+    assert!(
+        f.backend.log().is_empty(),
+        "selecting a skill never submits a turn"
+    );
+}
+#[test]
+fn mcp_command_tab_pages_until_complete_and_escape_preserves_the_query() {
+    let mut f = Fixture::new(Some("chat"));
+    f.type_text("/mcp");
+    f.with(|c, cx| assert!(c.slash_menu_key("tab", false, cx)));
+    let (request, first) = f.backend.script.lock().unwrap().mcp.remove(0);
+    assert_eq!(request.thread_id.as_deref(), Some("chat"));
+    assert_eq!(request.cursor, None);
+    first
+        .send_blocking(Ok(crate::agent::AgentMcpServerPage {
+            generation: 1,
+            cursor: None,
+            servers: Vec::new(),
+            next_cursor: Some("next".into()),
+            extra: Default::default(),
+        }))
+        .unwrap();
+    f.settle();
+    let (request, last) = f.backend.script.lock().unwrap().mcp.remove(0);
+    assert_eq!(request.cursor.as_deref(), Some("next"));
+    last.send_blocking(Ok(crate::agent::AgentMcpServerPage {
+        generation: 1,
+        cursor: Some("next".into()),
+        servers: Vec::new(),
+        next_cursor: None,
+        extra: Default::default(),
+    }))
+    .unwrap();
+    f.settle();
+    f.with(|c, cx| {
+        assert!(!c.command_catalog.mcp_loading);
+        assert!(c.slash_menu_enter(cx));
+        assert!(c.slash_menu_key("escape", false, cx));
+        assert!(!c.slash_menu_open(cx));
+        assert_eq!(c.prompt_text(cx), "/");
+    });
+    assert!(f.backend.log().is_empty());
+}
+#[test]
+fn init_never_overwrites_an_existing_agents_file() {
+    let root = std::env::temp_dir().join(format!("echora-init-command-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("AGENTS.md"), "preserve").unwrap();
+    let mut f = Fixture::new(None);
+    f.with(|c, cx| c.set_workspace_context(root.clone(), Some("project".into()), None, cx));
+    f.type_text("/init");
+    f.with(|c, cx| {
+        assert!(c.slash_menu_enter(cx));
+    });
+    f.settle();
+    assert!(f.backend.log().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+        "preserve"
+    );
+    f.with(|c, _| assert!(c.toasts().iter().any(|t| t.text.contains("AGENTS.md"))));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn rendered_slash_tab_and_escape_consume_native_function_flag_keys(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        crate::components::file_editor::init(cx);
+        cx.bind_keys([gpui::KeyBinding::new(
+            "escape",
+            crate::app::DismissPermissionUi,
+            None,
+        )]);
+    });
+    let (harness, window) = Harness::open(cx);
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        let composer = window.root::<ComposerView>().flatten().unwrap();
+        composer.update(cx, |c, cx| {
+            c.prompt_editor
+                .update(cx, |e, cx| e.replace_range(0..0, "/mcp", cx));
+            c.prompt_focus_handle(cx).focus(window, cx);
+        });
+    });
+    visual.run_until_parked();
+    visual.update(|w, cx| w.draw(cx).clear(cx));
+    for key in ["tab", "escape"] {
+        visual.simulate_event(gpui::KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                key: key.into(),
+                modifiers: gpui::Modifiers {
+                    function: true,
+                    ..Default::default()
+                },
+                key_char: None,
+            },
+            is_held: false,
+            prefer_character_input: false,
+        });
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            let composer = window.root::<ComposerView>().flatten().unwrap();
+            let c = composer.read(cx);
+            assert_eq!(c.prompt_text(cx), "/");
+            assert_eq!(c.slash_menu_open(cx), key == "tab");
+            assert!(c.prompt_focus_handle(cx).is_focused(window));
+            if key == "tab" {
+                assert!(c.slash_menu.as_ref().unwrap().mcp);
+            }
+        });
+    }
+    assert!(
+        harness.backend.log().is_empty(),
+        "navigation never submits a turn"
+    );
+}
+
+#[test]
+fn model_shortcuts_follow_provider_auth_and_restore_the_recent_configuration() {
+    let mut f = Fixture::new(Some("chat"));
+    f.with(|c,cx| {
+        let mut models=catalog();
+        models.models[0].supported_reasoning_efforts.push(AgentReasoningEffort {id:"high".into(),description:String::new()});
+        c.apply_model_catalog(models);
+        c.permission_config=Some(crate::agent::AgentConfigSnapshot {
+            generation:1,cwd:c.conversation.cwd.clone(),effective:serde_json::json!({"model_provider":"custom","model_providers":{"custom":{"requires_openai_auth":false}}}),
+            origins:Default::default(),layers:None,requirements:None,value_aliases:Default::default(),value_defaults:Default::default(),profile_parents:Default::default(),required_fields:Default::default(),
+        });
+        assert!(!c.command_model_available());
+        c.permission_config.as_mut().unwrap().effective["model_providers"]["custom"]["requires_openai_auth"]=true.into();
+        assert!(c.command_model_available());
+        c.set_recent_command_models(vec![crate::workspace::RecentModelConfiguration {model:"gpt-test".into(),effort:"high".into(),service_tier:None}],cx);
+    });
+    f.type_text("/model");
+    f.with(|c, cx| assert!(c.slash_menu_enter(cx)));
+    f.settle();
+    f.with(|c, cx| {
+        assert_eq!(c.command_model_rows(cx).len(), 1);
+        c.select_command_model(0, cx);
+        assert_eq!(c.conversation.selected_effort, "high");
+        assert_eq!(c.prompt_text(cx), "");
+        assert!(!c.slash_menu_open(cx));
+    });
+    assert!(f.backend.log().is_empty());
+}
+
+#[test]
+fn pending_init_does_not_overwrite_text_typed_after_selecting_it() {
+    let root = std::env::temp_dir().join(format!("echora-init-new-draft-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut f = Fixture::new(None);
+    f.with(|c, cx| c.set_workspace_context(root.clone(), Some("project".into()), None, cx));
+    f.type_text("/init");
+    f.with(|c, cx| {
+        c.select_slash_command(super::slash_menu::SlashCommand::Init, cx);
+        c.prompt_editor
+            .update(cx, |e, cx| e.replace_range(0..0, "later draft", cx));
+    });
+    f.settle();
+    assert!(f.backend.log().is_empty());
+    assert_eq!(f.with(|c, cx| c.prompt_text(cx).to_owned()), "later draft");
+    std::fs::remove_dir_all(root).unwrap();
 }

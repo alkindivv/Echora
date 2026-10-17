@@ -130,7 +130,11 @@ impl ChatApp {
             && self.right_panel.diff_review.is_none()
             && !self.showing_settings
             && !self.showing_pull_requests;
-        let occluded = self.chat_search.read(cx).is_open()
+        let occluded = self
+            .conversation_hosts
+            .get(&self.active_conversation)
+            .is_some_and(|host| host.composer.read(cx).has_modal_overlay())
+            || self.chat_search.read(cx).is_open()
             || self.image_preview.path.is_some()
             || self.permission_confirmation_open
             || self.project_creation.open

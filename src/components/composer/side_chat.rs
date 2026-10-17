@@ -113,6 +113,8 @@ impl ComposerView {
     }
 
     pub(super) fn clear_prompt(&mut self, cx: &mut Context<Self>) {
+        self.prompt_context.references.clear();
+        self.slash_menu = None;
         self.prompt_editor
             .update(cx, |editor, cx| editor.set_text_silently("", cx));
     }

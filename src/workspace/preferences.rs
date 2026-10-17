@@ -16,6 +16,8 @@ const PREFERENCES_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UiPreferences {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_model_configurations: Vec<RecentModelConfiguration>,
     #[serde(default)]
     pub language: crate::i18n::Language,
     #[serde(default = "preferences_version")]
@@ -449,4 +451,12 @@ mod tests {
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();
     }
+}
+
+/// Model, reasoning and speed selected together in the desktop recent menu.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecentModelConfiguration {
+    pub model: String,
+    pub effort: String,
+    pub service_tier: Option<String>,
 }

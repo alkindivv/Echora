@@ -13,7 +13,9 @@ mod dispatch;
 mod events;
 mod external_turn;
 mod features;
+mod feedback;
 mod file_search;
+mod fork;
 mod goal;
 mod hooks;
 mod loaded_threads;
@@ -433,6 +435,8 @@ impl CodexAppServerManager {
             AgentCapability::ThreadItemsList,
             AgentCapability::ThreadRevert,
             AgentCapability::ThreadCompact,
+            AgentCapability::ThreadFork,
+            AgentCapability::FeedbackUpload,
             AgentCapability::FileSearch,
             AgentCapability::ThreadRename,
             AgentCapability::ThreadArchive,

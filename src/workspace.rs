@@ -26,8 +26,8 @@ use loaders::{
     load_all_turns, receive,
 };
 pub use preferences::{
-    ActivityPreferences, FollowUpMode, PanelRatio, ProjectMarker, ReviewDelivery,
-    ReviewPreferences, SidebarPreferences, UiPreferences, preferred_language,
+    ActivityPreferences, FollowUpMode, PanelRatio, ProjectMarker, RecentModelConfiguration,
+    ReviewDelivery, ReviewPreferences, SidebarPreferences, UiPreferences, preferred_language,
 };
 use preferences::{PreferenceStore, default_preferences_path};
 pub use pull_requests::{
@@ -1438,6 +1438,26 @@ impl WorkspaceStore {
             }
         });
         self.save_preferences();
+    }
+
+    pub fn record_model_configuration(&self, configuration: RecentModelConfiguration) -> bool {
+        if self
+            .snapshot()
+            .preferences
+            .recent_model_configurations
+            .first()
+            == Some(&configuration)
+        {
+            return false;
+        }
+        self.update(|snapshot| {
+            let recent = &mut snapshot.preferences.recent_model_configurations;
+            recent.retain(|entry| entry != &configuration);
+            recent.insert(0, configuration);
+            recent.truncate(3);
+        });
+        self.save_preferences();
+        true
     }
 
     pub fn set_review_delivery(&self, delivery: preferences::ReviewDelivery) {

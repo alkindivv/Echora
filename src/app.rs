@@ -12,6 +12,7 @@ mod review;
 mod right_panel;
 mod side_chat;
 mod sidebar;
+mod slash_commands;
 mod state;
 mod summary;
 mod workspace_panels;
@@ -113,6 +114,7 @@ pub struct ChatApp {
     terminal_panels: HashMap<ConversationKey, Entity<TerminalPanel>>,
     /// The in-app browser of each chat, sharing one history and download list.
     browser_panels: HashMap<ConversationKey, Entity<BrowserPanel>>,
+    desktop_pet: Option<gpui::WindowHandle<crate::components::composer::DesktopPet>>,
     browser_store: Entity<BrowserStore>,
     /// Capture-only: the browser state to show, applied again to whichever
     /// chat's browser becomes current (a resumed thread arrives later).
@@ -301,6 +303,14 @@ impl ChatApp {
         });
         Self::wire_code_review(&initial_composer, cx);
         Self::wire_project_selection(&initial_composer, cx);
+        Self::wire_slash_commands(
+            &initial_composer,
+            workspace_store
+                .snapshot()
+                .preferences
+                .recent_model_configurations,
+            cx,
+        );
         cx.subscribe(
             &initial_composer,
             |this, _, event: &crate::components::composer::FollowUpModeToggled, cx| {
@@ -636,6 +646,7 @@ impl ChatApp {
             sidebar_layout: SidebarLayoutState::default(),
             terminal_panels: HashMap::new(),
             browser_panels: HashMap::new(),
+            desktop_pet: None,
             browser_store: cx.new(BrowserStore::new),
             #[cfg(feature = "screenshot")]
             browser_capture: None,
@@ -778,6 +789,14 @@ impl ChatApp {
         });
         Self::wire_code_review(&composer, cx);
         Self::wire_project_selection(&composer, cx);
+        Self::wire_slash_commands(
+            &composer,
+            self.workspace_store
+                .snapshot()
+                .preferences
+                .recent_model_configurations,
+            cx,
+        );
         cx.subscribe(
             &composer,
             |this, _, event: &crate::components::composer::FollowUpModeToggled, cx| {

@@ -16,6 +16,7 @@ const GENERATION: u64 = 1_000_000;
 
 fn queued(id: &str, text: &str) -> AgentQueuedSubmission {
     AgentQueuedSubmission {
+        references: Vec::new(),
         id: id.into(),
         client_message_id: format!("client-{id}"),
         text: text.into(),

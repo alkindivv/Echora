@@ -36,6 +36,32 @@ fn simulate_next_frame(app: &mut TestApp, window: &TestAppWindow<ChatApp>, elaps
 }
 
 #[test]
+fn slash_pet_opens_one_companion_window_and_toggles_it_closed() {
+    let mut app = TestApp::new();
+    let window = app.open_window(|_, cx| ChatApp::new(ThemeMode::Dark, false, cx));
+    let composer = window.read(|chat, cx| chat.home.read(cx).composer_entity());
+    for open in [true, false, true] {
+        app.update(|cx| {
+            composer.update(cx, |c, cx| {
+                c.select_slash_command(crate::components::composer::SlashCommand::Pet, cx);
+            })
+        });
+        app.run_until_parked();
+        window.read(|chat, _| assert_eq!(chat.desktop_pet.is_some(), open));
+        if open {
+            let handle = window.read(|chat, _| chat.desktop_pet.unwrap());
+            app.update(|cx| {
+                handle
+                    .update(cx, |_, w, _| {
+                        assert_eq!(w.viewport_size(), size(px(113.), px(147.)));
+                    })
+                    .unwrap()
+            });
+        }
+    }
+}
+
+#[test]
 fn approval_shortcuts_remain_registered_across_unrelated_shell_repaints() {
     use crate::components::approval::{ApprovalShortcut, init};
     let mut app = TestApp::new();

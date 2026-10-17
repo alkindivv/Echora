@@ -18,7 +18,6 @@ use crate::agent::{
     AgentImageView, AgentThreadActiveFlag, FilterValue, HistoryItemDetail, HistoryTurnStatus,
     Project, SortDirection, ThreadActivity, ThreadGitInfo, ThreadHistoryItem, ThreadListRequest,
     ThreadSection, ThreadSectionAppearance, ThreadSummary, ThreadTurn, UserMessageAttachment,
-    normalize_user_message_for_display,
 };
 
 pub(super) fn object_field<'a>(value: &'a Value, field: &str, context: &str) -> Result<&'a Value> {
@@ -319,7 +318,7 @@ pub(super) fn parse_history_item(value: &Value) -> Result<ThreadHistoryItem> {
                 {
                     text.trim().to_owned()
                 } else {
-                    normalize_user_message_for_display(&text)
+                    super::input::restore_references(content)?.0
                 },
             })
         }

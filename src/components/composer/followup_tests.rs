@@ -281,6 +281,7 @@ fn catalog() -> AgentModelCatalog {
 
 fn submission(id: &str, client: &str) -> AgentQueuedSubmission {
     AgentQueuedSubmission {
+        references: Vec::new(),
         id: id.into(),
         client_message_id: client.into(),
         text: id.into(),
@@ -1131,6 +1132,7 @@ impl Fixture {
         let (request, reply) = self.backend.script.lock().unwrap().adds.remove(0);
         reply
             .send_blocking(Ok(AgentQueuedSubmission {
+                references: Vec::new(),
                 id: id.into(),
                 client_message_id: request.client_message_id.clone(),
                 text: request.prompt.clone(),
@@ -1352,7 +1354,25 @@ fn the_slash_menu_lists_available_commands_and_runs_the_selected_one() {
     f.type_text("/");
     assert!(f.with(|c, cx| c.slash_menu_open(cx)));
     // Localized title order; Approve and Plan mode are not available.
-    assert_eq!(f.slash_titles(), ["压缩", "目标"]);
+    assert_eq!(
+        f.slash_titles(),
+        [
+            "MCP",
+            "侧边",
+            "创建聊天分支",
+            "初始化",
+            "压缩",
+            "反馈",
+            "归档",
+            "新聊天",
+            "状态",
+            "目标",
+            "绘图",
+            "置顶聊天",
+            "虚拟宠物",
+            "重命名"
+        ]
+    );
     f.type_text("/gooo");
     assert_eq!(f.slash_titles(), ["目标"]);
     f.type_text("/zzz");
@@ -1403,7 +1423,25 @@ fn slash_approve_lists_the_newest_denials_and_closes_once_one_is_recorded() {
             .apply_auto_approval_review(denied_review("newer"));
     });
     f.type_text("/");
-    assert_eq!(f.slash_titles(), ["压缩", "批准", "目标"]);
+    assert_eq!(
+        f.slash_titles(),
+        [
+            "MCP",
+            "侧边",
+            "创建聊天分支",
+            "压缩",
+            "反馈",
+            "归档",
+            "批准",
+            "新聊天",
+            "状态",
+            "目标",
+            "绘图",
+            "置顶聊天",
+            "虚拟宠物",
+            "重命名"
+        ]
+    );
     f.type_text("/autoreview");
     f.with(|c, cx| {
         assert!(c.slash_menu_enter(cx));

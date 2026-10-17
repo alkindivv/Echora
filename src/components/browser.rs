@@ -1324,6 +1324,11 @@ impl BrowserPanel {
         });
     }
 
+    /// Diagnostics are collected only after the user opens the feedback form.
+    pub fn feedback_diagnostics(&self) -> serde_json::Value {
+        serde_json::json!({"tabs":self.tabs.iter().map(|tab|serde_json::json!({"title":tab.page_title(),"url":tab.url,"loading":tab.loading,"error":tab.error.as_ref().map(|error|format!("{:?}",error.page))})).collect::<Vec<_>>()})
+    }
+
     /// Captures and app tests: the panel's tabs as (title, url).
     #[cfg(test)]
     pub fn tab_summaries(&self) -> Vec<(String, String)> {

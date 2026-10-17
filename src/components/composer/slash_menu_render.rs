@@ -1,6 +1,6 @@
 //! The slash menu's panel: 8px above the composer (and its tray) at full
-//! composer width, 16px radius, 4px padding, at most 320px tall. Rows are
-//! 4×8 padded and 28px tall in the reference window, 12px radius, 75%
+//! composer width, 20px radius, 4px padding, at most 320px tall. Rows are
+//! 5×8 padded and 28.57px tall in the reference window, 15px radius, 75%
 //! opaque until highlighted.
 //!
 //! The Code review submenu follows the reference's own list (DOM capture
@@ -15,7 +15,7 @@ use gpui::{
 use super::{
     ComposerView,
     review::{ReviewBranches, ReviewRow},
-    slash_menu::{DenialItem, SlashItem},
+    slash_menu::{DenialItem, SlashCommand, SlashItem},
 };
 use crate::{components::icons::icon, theme::Theme, theme::ThemeMode};
 
@@ -86,6 +86,17 @@ fn title_text(item: &SlashItem, colors: &MenuColors) -> StyledText {
 }
 
 impl ComposerView {
+    fn command_status_row(&self, text: String, colors: &MenuColors) -> AnyElement {
+        div()
+            .w_full()
+            .px(px(8.))
+            .py(px(5.))
+            .text_size(px(13.))
+            .line_height(px(18.57))
+            .text_color(colors.muted)
+            .child(text)
+            .into_any_element()
+    }
     fn menu_row(
         &self,
         index: usize,
@@ -98,13 +109,13 @@ impl ComposerView {
             .role(Role::MenuItem)
             .w_full()
             .px(px(8.0))
-            .py(px(4.0))
-            .rounded(px(12.0))
+            .py(px(5.0))
+            .rounded(px(15.0))
             .flex()
             .items_center()
             .gap(px(8.0))
             .text_size(px(13.0))
-            .line_height(px(20.0))
+            .line_height(px(18.57))
             .text_color(colors.text)
             .cursor_pointer()
             .opacity(if highlighted { 1.0 } else { 0.75 })
@@ -129,6 +140,22 @@ impl ComposerView {
     ) -> AnyElement {
         let command = item.command;
         let has_description = !item.description.is_empty();
+        let artwork = if let SlashCommand::Skill { index, .. } = command {
+            self.command_catalog
+                .skills
+                .get(index)
+                .and_then(|skill| skill.icon_path().cloned())
+        } else {
+            None
+        };
+        let scope = if let SlashCommand::Skill { index, .. } = command {
+            self.command_catalog
+                .skills
+                .get(index)
+                .map(|skill| skill.scope.label())
+        } else {
+            None
+        };
         self.menu_row(index, highlighted, colors, cx)
             .aria_label(SharedString::from(item.title.clone()))
             .debug_selector(move || format!("SLASH_{}", command.title().to_uppercase()))
@@ -140,7 +167,21 @@ impl ComposerView {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(icon(command.icon(), colors.text).size(px(16.0))),
+                    .child(if let Some(path) = artwork {
+                        if path.extension().is_some_and(|extension| extension == "svg") {
+                            gpui::svg()
+                                .path(path.to_string_lossy().into_owned())
+                                .text_color(colors.text)
+                                .size(px(16.))
+                                .into_any_element()
+                        } else {
+                            gpui::img(path).size(px(16.)).into_any_element()
+                        }
+                    } else {
+                        icon(command.icon(), colors.text)
+                            .size(px(16.))
+                            .into_any_element()
+                    }),
             )
             .child(
                 div()
@@ -157,6 +198,15 @@ impl ComposerView {
                         .truncate()
                         .text_color(colors.muted)
                         .child(item.description),
+                )
+            })
+            .when_some(scope, |row, scope| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(colors.muted)
+                        .child(scope),
                 )
             })
             .when(command.opens_submenu(), |row| {
@@ -352,7 +402,174 @@ impl ComposerView {
         let colors = menu_colors(theme, self.mode);
         let mut rows: Vec<AnyElement> = Vec::new();
         let review = menu.review && !menu.denials;
-        if review {
+        if menu.mcp {
+            if self.command_catalog.mcp_loading {
+                rows.push(self.command_status_row(
+                    crate::i18n::format!("正在加载 MCP 状态…" => "Loading MCP status…"),
+                    &colors,
+                ));
+            } else if let Some(error) = &self.command_catalog.mcp_error {
+                rows.push(self.command_status_row(error.clone(), &colors));
+                rows.push(
+                    div()
+                        .id("mcp-command-retry")
+                        .px(px(8.))
+                        .py(px(5.))
+                        .text_color(colors.info)
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| this.load_command_mcp(cx)))
+                        .child(crate::i18n::text("重试"))
+                        .into_any_element(),
+                );
+            } else if self.command_catalog.mcp.is_empty() {
+                rows.push(self.command_status_row(
+                    crate::i18n::format!("未配置 MCP 服务器" => "No MCP servers configured"),
+                    &colors,
+                ));
+            } else {
+                for server in &self.command_catalog.mcp {
+                    let enabled = self
+                        .permission_config
+                        .as_ref()
+                        .and_then(|config| config.effective.get("mcp_servers"))
+                        .and_then(|servers| servers.get(&server.name))
+                        .and_then(|config| config.get("enabled"))
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(true);
+                    let auth = match server.auth_status {
+                        crate::agent::AgentMcpAuthStatus::OAuth => {
+                            crate::i18n::format!("已通过身份验证 (OAuth)" => "Authenticated (OAuth)")
+                        }
+                        crate::agent::AgentMcpAuthStatus::BearerToken => {
+                            crate::i18n::format!("已通过身份验证 (Bearer token)" => "Authenticated (Bearer token)")
+                        }
+                        crate::agent::AgentMcpAuthStatus::NotLoggedIn => {
+                            crate::i18n::format!("未通过身份验证" => "Not authenticated")
+                        }
+                        _ => crate::i18n::format!("不支持身份验证" => "Auth unsupported"),
+                    };
+                    rows.push(
+                        div()
+                            .w_full()
+                            .px(px(8.))
+                            .py(px(5.))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .text_size(px(13.))
+                            .line_height(px(18.57))
+                            .text_color(colors.text)
+                            .child(server.name.clone())
+                            .child(div().flex_1().text_color(colors.muted).child(if enabled {
+                                crate::i18n::text("已启用")
+                            } else {
+                                crate::i18n::text("已禁用")
+                            }))
+                            .child(div().text_color(colors.muted).child(auth))
+                            .into_any_element(),
+                    );
+                }
+            }
+        } else if menu.models || menu.reasoning {
+            if menu.models {
+                rows.push(self.command_status_row(
+                    crate::i18n::format!("最近使用的模型"=>"Recent models"),
+                    &colors,
+                ));
+            }
+            for (index, (_, title, description, selected)) in
+                self.command_model_rows(cx).into_iter().enumerate()
+            {
+                rows.push(
+                    self.menu_row(index, index == menu.highlighted, &colors, cx)
+                        .aria_label(title.clone())
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.select_command_model(index, cx)),
+                        )
+                        .child(
+                            icon(
+                                if menu.models {
+                                    "model-reset"
+                                } else {
+                                    "slash-plan-mode"
+                                },
+                                colors.text,
+                            )
+                            .size(px(16.)),
+                        )
+                        .child(title)
+                        .child(
+                            div()
+                                .min_w(px(0.))
+                                .flex_1()
+                                .truncate()
+                                .text_color(colors.muted)
+                                .child(description),
+                        )
+                        .when(selected, |d| {
+                            d.child(icon("check", colors.text).size(px(16.)))
+                        })
+                        .into_any_element(),
+                );
+            }
+        } else if menu.fork {
+            for (index, (_, title, description)) in
+                self.command_fork_rows(cx).into_iter().enumerate()
+            {
+                rows.push(
+                    self.menu_row(index, index == menu.highlighted, &colors, cx)
+                        .aria_label(title.clone())
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.select_command_fork(index, cx)),
+                        )
+                        .child(icon("project-worktree", colors.text).size(px(16.)))
+                        .child(title)
+                        .child(
+                            div()
+                                .min_w(px(0.))
+                                .flex_1()
+                                .truncate()
+                                .text_color(colors.muted)
+                                .child(description),
+                        )
+                        .into_any_element(),
+                );
+            }
+        } else if menu.project {
+            if self.project_picker.loading {
+                rows.push(self.command_status_row(
+                    crate::i18n::format!("正在加载项目…" => "Loading projects…"),
+                    &colors,
+                ));
+            }
+            if let Some(error) = &self.project_picker.error {
+                rows.push(self.command_status_row(error.clone(), &colors));
+            }
+            for (index, (_, title, description)) in
+                self.command_project_rows(cx).into_iter().enumerate()
+            {
+                rows.push(
+                    self.menu_row(index, index == menu.highlighted, &colors, cx)
+                        .aria_label(title.clone())
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.select_command_project(index, cx)
+                            }),
+                        )
+                        .child(icon("utility-folder", colors.text).size(px(16.)))
+                        .child(title)
+                        .child(
+                            div()
+                                .min_w(px(0.))
+                                .flex_1()
+                                .truncate()
+                                .text_color(colors.muted)
+                                .child(description),
+                        )
+                        .into_any_element(),
+                );
+            }
+        } else if review {
             let colors = MenuColors {
                 highlight: colors.review_highlight,
                 ..menu_colors(theme, self.mode)
@@ -396,8 +613,42 @@ impl ComposerView {
                         .into_any_element(),
                 );
             }
+            let mut skill_section = false;
             for (index, item) in items.into_iter().enumerate() {
+                if matches!(item.command, SlashCommand::Skill { .. }) && !skill_section {
+                    skill_section = true;
+                    rows.push(
+                        div()
+                            .px(px(8.))
+                            .pt(px(8.))
+                            .pb(px(4.))
+                            .text_size(px(13.))
+                            .line_height(px(18.57))
+                            .text_color(colors.muted)
+                            .child(crate::i18n::text("技能"))
+                            .into_any_element(),
+                    );
+                }
                 rows.push(self.command_row(index, item, index == menu.highlighted, &colors, cx));
+            }
+            if self.command_catalog.skills_loading {
+                rows.push(self.command_status_row(
+                    crate::i18n::format!("正在加载技能…" => "Loading skills…"),
+                    &colors,
+                ));
+            } else if let Some(error) = &self.command_catalog.skills_error {
+                rows.push(self.command_status_row(error.clone(), &colors));
+                rows.push(
+                    div()
+                        .id("skill-command-retry")
+                        .px(px(8.))
+                        .py(px(5.))
+                        .text_color(colors.info)
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| this.retry_command_skills(cx)))
+                        .child(crate::i18n::text("重试"))
+                        .into_any_element(),
+                );
             }
         }
         Some(
@@ -412,14 +663,17 @@ impl ComposerView {
                     .bottom(px(body_height + self.tray_height() + MENU_GAP))
                     .max_h(px(MENU_MAX_HEIGHT))
                     .overflow_y_scroll()
+                    .track_scroll(&self.slash_scroll)
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.dismiss_slash_menu(cx);
+                    }))
                     .p(px(4.0))
-                    .rounded(px(16.0))
+                    .rounded(px(20.0))
                     .border_1()
                     .border_color(colors.border)
                     .bg(colors.surface)
                     .flex()
                     .flex_col()
-                    .when(!review, |panel| panel.gap(px(4.0)))
                     .children(rows),
             )
             .with_priority(2)

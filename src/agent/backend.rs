@@ -37,6 +37,8 @@ pub enum AgentCapability {
     ThreadItemsList,
     ThreadRevert,
     ThreadCompact,
+    ThreadFork,
+    FeedbackUpload,
     FileSearch,
     ThreadRename,
     ThreadArchive,
@@ -146,11 +148,29 @@ pub struct AgentRequest {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AgentPromptContext {
     pub files: Vec<AgentInputFile>,
+    /// Typed references occupying UTF-8 byte ranges in the visible prompt.
+    pub references: Vec<AgentInputReference>,
     /// None preserves the current conversation mode; false explicitly exits planning.
     pub plan_mode: Option<bool>,
     /// A new chat's memory switches, sent as `thread/start` config overrides.
     /// None leaves the configured defaults; ignored once the thread exists.
     pub memory: Option<super::AgentMemoryPreferences>,
+}
+
+/// A semantic inline reference. Its identity never comes from the display label.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AgentInputReference {
+    pub range: std::ops::Range<usize>,
+    pub name: String,
+    pub path: String,
+    pub label: String,
+    pub kind: AgentInputReferenceKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AgentInputReferenceKind {
+    Skill,
+    Mention,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,6 +194,16 @@ pub struct AgentSteerRequest {
     pub client_message_id: String,
     pub prompt: String,
     pub context: AgentPromptContext,
+}
+
+/// A feedback submission. Extra files are explicit user-selected diagnostics.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentFeedbackRequest {
+    pub classification: String,
+    pub reason: String,
+    pub include_logs: bool,
+    pub thread_id: Option<ThreadId>,
+    pub extra_log_files: Vec<PathBuf>,
 }
 
 /// An independent, temporary conversation using a parent's history as context.
@@ -271,6 +301,21 @@ impl fmt::Debug for AgentExternalTurn {
 
 /// Boundary between the application and a concrete coding-agent protocol.
 pub trait AgentBackend: Send + Sync {
+    /// Creates a durable branch, preserving the parent's history and settings.
+    fn fork_conversation(
+        &self,
+        _thread_id: ThreadId,
+        _cwd: PathBuf,
+    ) -> Receiver<WorkspaceResult<ThreadId>> {
+        unsupported_receiver(AgentCapability::ThreadFork)
+    }
+
+    fn upload_feedback(
+        &self,
+        _request: AgentFeedbackRequest,
+    ) -> Receiver<WorkspaceResult<ThreadId>> {
+        unsupported_receiver(AgentCapability::FeedbackUpload)
+    }
     fn capabilities(&self) -> AgentCapabilities {
         AgentCapabilities::default()
     }

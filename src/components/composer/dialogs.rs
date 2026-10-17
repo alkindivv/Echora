@@ -30,6 +30,10 @@ pub(crate) enum DialogChoice {
 }
 
 impl ComposerView {
+    pub(crate) fn has_modal_overlay(&self) -> bool {
+        self.dialog.is_some() || self.command_panels.feedback || self.sketch.open
+    }
+
     pub(crate) fn choose_dialog(&mut self, choice: DialogChoice, cx: &mut Context<Self>) {
         let Some(dialog) = self.dialog.take() else {
             return;
@@ -66,6 +70,12 @@ impl ComposerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if let Some(sketch) = self.render_sketch(window, cx) {
+            return Some(sketch);
+        }
+        if let Some(feedback) = self.render_command_feedback(window, cx) {
+            return Some(feedback);
+        }
         if let Some(menu) = self.render_workspace_menu(window, cx) {
             return Some(menu);
         }

@@ -43,6 +43,7 @@ mod server_requests;
 mod settings;
 mod side_conversation;
 mod skills_mcp;
+mod slash_commands;
 mod steer;
 
 #[test]

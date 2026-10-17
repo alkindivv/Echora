@@ -31,6 +31,7 @@ fn steer_parameters_share_input_encoding_and_exclude_turn_overrides() {
     };
     let mut request = steer(&target, "client-1");
     request.context = AgentPromptContext {
+        references: Vec::new(),
         plan_mode: Some(true),
         files: vec![
             AgentInputFile {

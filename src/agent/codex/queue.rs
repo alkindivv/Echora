@@ -36,16 +36,18 @@ pub(super) fn parse_submission(value: &Value) -> Result<AgentQueuedSubmission> {
     });
     super::items::validate_user_message(item.as_object().expect("literal object"))
         .context("QueuedSubmission.input 不符合 UserInput schema")?;
-    let ThreadHistoryItem::UserMessage { text, images, .. } =
+    let ThreadHistoryItem::UserMessage { images, .. } =
         super::workspace_protocol::parse_history_item(&item)?
     else {
         bail!("QueuedSubmission.input 未解码为用户消息");
     };
+    let (text, references) = super::input::restore_references(input)?;
     Ok(AgentQueuedSubmission {
         id,
         client_message_id,
         text,
         attachments: images,
+        references,
     })
 }
 

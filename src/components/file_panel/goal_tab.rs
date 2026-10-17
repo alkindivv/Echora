@@ -105,7 +105,9 @@ impl FilePanel {
             match event {
                 EditorEvent::Save => panel.save_goal(id, cx),
                 EditorEvent::Changed => {}
-                EditorEvent::Submit | EditorEvent::SubmitInverted => {}
+                EditorEvent::SelectionChanged
+                | EditorEvent::Submit
+                | EditorEvent::SubmitInverted => {}
             }
             cx.notify();
         })

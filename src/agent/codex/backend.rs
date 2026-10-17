@@ -41,6 +41,20 @@ impl Default for CodexAppServerBackend {
 }
 
 impl AgentBackend for CodexAppServerBackend {
+    fn fork_conversation(
+        &self,
+        thread_id: ThreadId,
+        cwd: PathBuf,
+    ) -> Receiver<WorkspaceResult<ThreadId>> {
+        self.manager.fork_conversation(thread_id, cwd)
+    }
+
+    fn upload_feedback(
+        &self,
+        request: crate::agent::AgentFeedbackRequest,
+    ) -> Receiver<WorkspaceResult<ThreadId>> {
+        self.manager.upload_feedback(request)
+    }
     fn capabilities(&self) -> crate::agent::AgentCapabilities {
         self.manager.capabilities()
     }
