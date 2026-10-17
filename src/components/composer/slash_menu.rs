@@ -69,7 +69,7 @@ impl SlashCommand {
         Self::Pet,
     ];
 
-    fn id(self) -> &'static str {
+    pub(super) fn id(self) -> &'static str {
         match self {
             Self::Approve => "autoreview",
             Self::CodeReview => "review",
@@ -308,7 +308,7 @@ impl ComposerView {
         self.slash_token(cx).map(|(_, query)| query)
     }
 
-    fn command_available(&self, command: SlashCommand) -> bool {
+    pub(super) fn command_available(&self, command: SlashCommand) -> bool {
         match command {
             SlashCommand::Approve => !self
                 .conversation
@@ -363,7 +363,7 @@ impl ComposerView {
         }
     }
 
-    fn command_description(&self, command: SlashCommand) -> String {
+    pub(super) fn command_description(&self, command: SlashCommand) -> String {
         match command {
             SlashCommand::Approve => {
                 crate::i18n::format!("批准最近一次自动审查驳回" => "Approve a recent auto-review denial")
@@ -594,6 +594,10 @@ impl ComposerView {
     /// Follows the composer text: a slash token opens the menu, anything else
     /// closes it.
     pub(super) fn update_slash_menu(&mut self, cx: &mut Context<Self>) {
+        if self.context_menu_open {
+            self.slash_menu = None;
+            return;
+        }
         let Some(query) = self.slash_query(cx) else {
             self.slash_menu = None;
             return;

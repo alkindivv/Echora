@@ -35,6 +35,11 @@ struct Script {
     log: Vec<String>,
     skills: Vec<(crate::agent::AgentSkillsLoadRequest, SkillReply)>,
     mcp: Vec<(crate::agent::AgentMcpServerStatusRequest, McpReply)>,
+    plugins: Vec<
+        async_channel::Sender<
+            Result<crate::agent::AgentPluginCatalog, crate::agent::AgentPluginsError>,
+        >,
+    >,
     reviews: Vec<(AgentReviewRequest, async_channel::Sender<AgentEvent>)>,
     shells: Vec<(AgentShellCommandRequest, Reply<AgentShellCommandStarted>)>,
     server_turn: Option<(String, AgentRun)>,
@@ -71,6 +76,16 @@ impl AgentBackend for Backend {
         let (sender, receiver) = async_channel::bounded(1);
         self.script.lock().unwrap().skills.push((request, sender));
         receiver
+    }
+    fn load_installed_plugins(
+        &self,
+        _request: crate::agent::AgentPluginInstalledRequest,
+    ) -> async_channel::Receiver<
+        Result<crate::agent::AgentPluginCatalog, crate::agent::AgentPluginsError>,
+    > {
+        let (tx, rx) = async_channel::bounded(1);
+        self.script.lock().unwrap().plugins.push(tx);
+        rx
     }
     fn list_mcp_servers(
         &self,
@@ -903,4 +918,175 @@ fn pending_init_does_not_overwrite_text_typed_after_selecting_it() {
     assert!(f.backend.log().is_empty());
     assert_eq!(f.with(|c, cx| c.prompt_text(cx).to_owned()), "later draft");
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn add_picker_ignores_results_from_a_previous_opening_and_keeps_the_draft() {
+    let mut f = Fixture::new(None);
+    f.type_text("existing draft ");
+    f.with(|c, cx| {
+        c.context_menu_open = true;
+        c.load_context_catalog(cx);
+    });
+    let old = f.backend.script.lock().unwrap().plugins.remove(0);
+    f.with(|c, cx| {
+        c.dismiss_context(cx);
+        c.context_menu_open = true;
+        c.load_context_catalog(cx);
+    });
+    old.send_blocking(Err(crate::agent::AgentPluginsError {
+        kind: crate::agent::AgentPluginsErrorKind::Connection,
+        message: "stale failure".into(),
+        data: None,
+        outcome_unknown: false,
+    }))
+    .unwrap();
+    f.settle();
+    f.with(|c, cx| {
+        assert!(c.context_catalog.error.is_none());
+        assert!(c.context_catalog.loading);
+        assert_eq!(c.prompt_text(cx), "existing draft ");
+    });
+    let current = f.backend.script.lock().unwrap().plugins.remove(0);
+    current
+        .send_blocking(Ok(crate::agent::AgentPluginCatalog {
+            generation: 1,
+            marketplaces: Vec::new(),
+            featured_plugin_ids: Vec::new(),
+            marketplace_load_errors: Vec::new(),
+            extra: Default::default(),
+        }))
+        .unwrap();
+    f.settle();
+    f.with(|c, cx| {
+        assert!(!c.context_catalog.loading);
+        c.prompt_editor.update(cx, |e, cx| {
+            e.replace_range(e.cursor()..e.cursor(), "goal", cx)
+        });
+    });
+    f.settle();
+    f.with(|c, cx| {
+        assert_eq!(c.context_catalog.query, "goal");
+        assert!(c.context_menu_key("enter", false, cx));
+        assert!(c.goal_draft);
+        assert_eq!(c.prompt_text(cx), "existing draft ");
+        assert!(!c.context_menu_open);
+    });
+    assert!(
+        f.backend.log().is_empty(),
+        "selecting context never submits a turn"
+    );
+}
+
+#[gpui::test]
+fn rendered_add_picker_filters_and_consumes_tab_and_escape_with_native_fn_keys(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|cx| {
+        crate::components::file_editor::init(cx);
+        cx.bind_keys([gpui::KeyBinding::new(
+            "escape",
+            crate::app::DismissPermissionUi,
+            None,
+        )]);
+    });
+    let (harness, window) = Harness::open(cx);
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|w, cx| {
+        let c = w.root::<ComposerView>().flatten().unwrap();
+        c.update(cx, |c, cx| {
+            c.prompt_focus_handle(cx).focus(w, cx);
+            c.toggle_context(w, cx);
+        });
+    });
+    visual.run_until_parked();
+    visual.update(|w, cx| w.draw(cx).clear(cx));
+    visual.simulate_input("sketch");
+    visual.run_until_parked();
+    visual.simulate_event(gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke {
+            key: "tab".into(),
+            modifiers: gpui::Modifiers {
+                function: true,
+                ..Default::default()
+            },
+            key_char: None,
+        },
+        is_held: false,
+        prefer_character_input: false,
+    });
+    visual.run_until_parked();
+    visual.update(|w, cx| {
+        let c = w.root::<ComposerView>().flatten().unwrap();
+        assert!(c.read(cx).sketch.open);
+        assert!(!c.read(cx).context_menu_open);
+        assert_eq!(c.read(cx).prompt_text(cx), "");
+        c.update(cx, |c, cx| {
+            c.sketch.open = false;
+            c.toggle_context(w, cx);
+        });
+    });
+    visual.run_until_parked();
+    visual.update(|w, cx| w.draw(cx).clear(cx));
+    visual.simulate_event(gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke {
+            key: "escape".into(),
+            modifiers: gpui::Modifiers {
+                function: true,
+                ..Default::default()
+            },
+            key_char: None,
+        },
+        is_held: false,
+        prefer_character_input: false,
+    });
+    visual.run_until_parked();
+    visual.update(|w, cx| {
+        let c = w.root::<ComposerView>().flatten().unwrap();
+        assert!(!c.read(cx).context_menu_open);
+        assert!(c.read(cx).prompt_focus_handle(cx).is_focused(w));
+    });
+    assert!(harness.backend.log().is_empty());
+}
+
+#[gpui::test]
+fn add_picker_file_result_survives_its_query_edit_and_cancel_keeps_draft(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (_harness, window) = Harness::open(cx);
+    let composer = window.update(cx, |_, _, cx| cx.entity()).unwrap();
+    composer.update(cx, |c, cx| {
+        c.set_draft_text("keep draft ", cx);
+        c.context_menu_open = true;
+        c.load_context_catalog(cx);
+        c.prompt_editor.update(cx, |e, cx| {
+            e.replace_range(e.cursor()..e.cursor(), "files", cx);
+        });
+    });
+    cx.run_until_parked();
+    composer.update(cx, |c, cx| assert!(c.context_menu_key("enter", false, cx)));
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_paths());
+    cx.simulate_path_prompt_response(|options| {
+        assert!(options.files && options.directories && options.multiple);
+        Some(vec!["/tmp/issue27-file.txt".into()])
+    });
+    cx.run_until_parked();
+    composer.update(cx, |c, cx| {
+        assert_eq!(c.prompt_text(cx), "keep draft ");
+        assert_eq!(
+            c.prompt_context.files[0].path,
+            PathBuf::from("/tmp/issue27-file.txt")
+        );
+        c.context_menu_open = true;
+        c.load_context_catalog(cx);
+        c.select_context_row(0, cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+    composer.update(cx, |c, cx| {
+        assert_eq!(c.prompt_text(cx), "keep draft ");
+        assert_eq!(c.prompt_context.files.len(), 1);
+    });
 }

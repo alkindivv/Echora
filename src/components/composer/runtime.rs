@@ -244,6 +244,7 @@ impl ComposerView {
                 self.prompt_context.files.clear();
                 self.prompt_context.references.clear();
                 self.context_menu_open = false;
+                self.context_catalog.cancel();
                 if !self.review_comments.is_empty() {
                     self.review_comments.clear();
                     cx.emit(super::ReviewCommentsSubmitted);
@@ -290,6 +291,7 @@ impl ComposerView {
         self.prompt_context.files.clear();
         self.prompt_context.references.clear();
         self.context_menu_open = false;
+        self.context_catalog.cancel();
         if !self.review_comments.is_empty() {
             self.review_comments.clear();
             cx.emit(super::ReviewCommentsSubmitted);

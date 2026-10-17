@@ -170,6 +170,8 @@ pub struct AgentInputReference {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AgentInputReferenceKind {
     Skill,
+    Plugin,
+    Thread,
     Mention,
 }
 

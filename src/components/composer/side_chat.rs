@@ -128,11 +128,11 @@ impl ComposerView {
         if self.context_menu_open {
             self.focus_prompt_pending = true;
         }
-        self.context_focus_pending = false;
         self.menu_open = false;
         self.permission_menu_open = false;
         self.model_list_open = false;
         self.context_menu_open = false;
+        self.context_catalog.cancel();
         cx.notify();
     }
 

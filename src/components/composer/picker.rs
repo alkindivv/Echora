@@ -395,7 +395,7 @@ impl ComposerView {
     pub fn close_picker(&mut self, cx: &mut Context<Self>) {
         if self.context_menu_open {
             self.context_menu_open = false;
-            self.context_focus_pending = false;
+            self.context_catalog.cancel();
             self.focus_prompt_pending = true;
             cx.notify();
         }

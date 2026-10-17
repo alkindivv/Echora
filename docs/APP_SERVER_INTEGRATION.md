@@ -142,7 +142,7 @@ UI 由真实后端状态驱动：侧边栏账户菜单显示账户标签与套�
 
 Composer 的按钮呈现与激活共用状态判定：运行中有草稿时发送，无草稿时停止；启动、停止与提交等待期间显示忙碌状态且不重复激活，已中断的空输入显示继续。Enter 发送、Shift+Enter 换行。空输入恢复也等待真实 TurnReady 确认，不需要 userMessage 通知。失败快照可显式恢复，自动恢复仅限草稿自发送后未修改且仍为空；已有新草稿时不覆盖。主会话与侧边聊天分别持有草稿、提交和事件流。提交快照只保留在当前应用会话中，不写入后端历史。RPC 已接受但尚未收到 userMessage 时显示接受回执；若轮次此时结束，仍保留回执和快照，并允许显式恢复副本，不把未收到的消息事件伪造到服务端历史，也不自动重发。
 
-运行中是否改为排队由「跟进处理方式」决定，见下节；引导路径与本节行为不变。技能入口将真实 `skills/list` 身份插入编辑器，发送为参考实测的 `[$name](<absolute/SKILL.md>)` 与空 `text_elements`，不重复添加 typed skill。编辑器与队列保留引用范围、名称、路径和显示标签；历史从符合该调用格式的绝对 SKILL.md 链接恢复技能。适配器兼容 schema typed mention 与匹配的 text_elements，但尚无 mention 选择入口；音频与图片 `detail` 不在当前编辑入口。文件上下文仍使用文本包络；其中增加附件类型元数据供历史恢复，属于 input 文本，不增加 RPC 字段。旧混合包络若图片已转换为不透明 URL、无法判断路径类型，则保留原来的图片展示，不猜测额外文件卡。
+运行中是否改为排队由「跟进处理方式」决定，见下节；引导路径与本节行为不变。技能入口将真实 `skills/list` 身份插入编辑器，发送为参考实测的 `[$name](<absolute/SKILL.md>)` 与空 `text_elements`，不重复添加 typed skill。编辑器与队列保留引用范围、名称、路径和显示标签；历史从符合该调用格式的绝对 SKILL.md 链接恢复技能。插件通过 `plugin/installed` 实际身份选择，发送参考实测的 `[@Display name](plugin://id)`，本机聊天引用使用 `thread://id?hostId=local` 并附加分页读取的用户／助手消息快照；这些 Markdown 引用同样不重复添加 typed mention。适配器继续兼容 schema typed mention 与匹配的 text_elements；音频与图片 `detail` 不在当前编辑入口。文件上下文仍使用文本包络；其中增加附件类型元数据供历史恢复，属于 input 文本，不增加 RPC 字段。旧混合包络若图片已转换为不透明 URL、无法判断路径类型，则保留原来的图片展示，不猜测额外文件卡。
 
 代码入口：协议位于 [src/agent/codex/](../src/agent/codex/)，领域类型位于 [src/agent/](../src/agent/)，工作区合并位于 [src/workspace.rs](../src/workspace.rs)，会话归约位于 [src/conversation/](../src/conversation/)。方法表的“入口”相对于 `src/agent/codex/`，省略 `.rs`。
 
@@ -184,6 +184,12 @@ Composer 的按钮呈现与激活共用状态判定：运行中有草稿时发�
 初始化在后台检查 cwd/AGENTS.md：存在则跳过，否则发送参考的贡献指南提示词；期间输入、cwd 或线程变化会取消后续发送。反馈表单要求分类与详情，诊断日志、聊天文档和浏览器快照按选项传入 `feedback/upload`；成功显示回执，失败或回执缺失明确显示未确认，不自动重发；浏览器快照只含本客户端可读取的标签状态，不包含尚未采集的网络／控制台日志。草图在本机编辑矢量笔迹、形状与文字后导出 PNG；矢量重开限当前会话。虚拟宠物是独立透明浮动窗口。界面关闭或取消不会发送 turn。
 
 参考 bundle 中另外存在由云端、已连接 IDE、独立快捷窗口或 ChatGPT 会话路由注册的命令（包括 cloud/environment、IDE context、share、usage、dictate、read-aloud、lockdown）；当前客户端没有这些路由或对应服务，不能以菜单占位视为已接入。`@` 与「＋」菜单另行验收。
+
+### 添加上下文菜单
+
+输入框 `+` 使用同宽、最高 320 px 的建议菜单，按添加、插件、技能、标签页、文件和聊天分组；新聊天才显示项目入口，计划模式遵守服务端 preset。输入框保持焦点，打开后输入的查询筛选条目并调用 `thread/search` 与 `fuzzyFileSearch` 会话；Enter／Tab 确认，Escape 或再次点击关闭并保留文字。每次打开、查询、cwd 与 generation 都隔离异步响应，关闭时停止搜索会话。插件仅展示 `plugin/installed` 返回的已安装、启用且未禁用条目，图标与说明来自 interface；失败提供可操作的重试。
+
+文件／目录使用原生多选选择器，取消不清空已有草稿，迟到结果不得写入已变化的草稿。图片作为 localImage，普通文件仍走文件上下文包络。应用内浏览器由用户明确选择标签页后读取页面可见文本（最多 120000 字符）、选区、标题和 URL，保存为本机 JSON 附件；不采集外部应用或外部浏览器。聊天快照遍历 full turns（重复游标报错、最多 64 页），只附加用户与助手消息，并明确标为非可信参考。ChatGPT 的应用快照、外部浏览器桥接、技能录制与插件模板建议依赖其专属原生服务，本客户端没有这些接口。
 
 0.158 参考与本机基线的差异（只实现 0.154 schema 已有字段）：通知多出 `emittedAtMs`；`turn/completed` 携带 summary items；`turn/start` 多出 `environments`、`turnTrigger`、`multiAgentMode`、`responsesapiClientMetadata` 等字段；`turn/steer` 多出 `responsesapiClientMetadata`；`thread/queue/changed` 周期性重复下发。
 
@@ -349,7 +355,7 @@ Hook 字段范围：eventName 支持 preToolUse、permissionRequest、postToolUs
 | `modelProvider/capabilities/read` | 默认 | 已接入 | params `{}`，随配置读取与权限目录按 generation 读取；webSearch=false 时「网页搜索」只可选关闭并说明「当前模型提供方不支持网页搜索」，imageGeneration=false 时隐藏图片生成失败后的重试；namespaceTools 只保存。读取失败视为未知、不做门控。参考不读取响应字段，此处为 Echora 新增门控。 | `manager/catalog`、`settings/view/configuration` |
 | `permissionProfile/list` | 默认 | 已接入 | cwd、limit=100、遍历 nextCursor，拒绝循环游标及重复 id；消费 id/allowed/description，兼容可选 extends；设置展示 profile，Composer 菜单仅列三种权限模式并据目录判定禁用原因，提交前复核 allowed。 | `manager/catalog`、`catalog` |
 | `plugin/install` | 默认 | 已接入 | pluginName + marketplacePath/remoteMarketplaceName（未用一侧显式 null），可选 installAttemptId；120s 操作窗口，成功回执保留 authPolicy 与 appsNeedingAuth；超时与不可读结果分别建模为 TimedOut/Unknown，不自动重试。 | `manager/plugins`、`plugins_catalog` |
-| `plugin/installed` | 默认 | 已接入 | cwds 与 installSuggestionPluginNames；与 `plugin/list` 分别缓存，安装开关状态以该响应为准。 | `manager/plugins`、`plugins` |
+| `plugin/installed` | 默认 | 已接入 | cwds 与 installSuggestionPluginNames；与 `plugin/list` 分别缓存，安装开关状态以该响应为准；输入框添加选择器按 cwd/generation 读取并展示已安装启用条目。 | `manager/plugins`、`plugins` |
 | `plugin/list` | 默认 | 已接入 | cwds、forceRefetch、marketplaceKinds（浏览目录时请求全部类型）；保留 marketplaceLoadErrors、featuredPluginIds、interface、source 四种变体与未知字段；行内容与分段徽标计数均来自该响应。 | `manager/plugins`、`plugins` |
 | `plugin/reconcile` | 默认 | 已接入 | reason；每个连接 generation 首次加载插件目录时执行一次，回执中的 changedPlugins 与失败 id 列表按服务端上报展示。 | `manager/plugins`、`plugins_catalog` |
 | `plugin/read` | 默认 | 已接入 | pluginName + marketplacePath/remoteMarketplaceName；保留 description、apps、appTemplates、hooks、mcpServers、scheduledTasks、skills 与未知字段。 | `manager/plugins`、`plugins` |

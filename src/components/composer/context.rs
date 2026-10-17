@@ -2,42 +2,65 @@
 
 use super::ComposerView;
 use crate::{agent::AgentInputFile, components::icons::icon, theme::Theme};
-use gpui::{
-    Context, KeyDownEvent, PathPromptOptions, Role, Window, deferred, div, img, prelude::*, px,
-};
+use gpui::{Context, KeyDownEvent, PathPromptOptions, Role, Window, div, img, prelude::*, px};
 
 pub struct OpenAttachmentPreview(pub std::path::PathBuf);
 impl gpui::EventEmitter<OpenAttachmentPreview> for ComposerView {}
 
 impl ComposerView {
     pub(super) fn toggle_context(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.context_menu_open = !self.context_menu_open;
-        self.context_focus_pending = self.context_menu_open;
-        self.menu_open = false;
-        self.permission_menu_open = false;
         if self.context_menu_open {
-            self.context_focus.focus(window, cx);
+            self.dismiss_context(cx);
+        } else {
+            self.context_menu_open = true;
+            self.menu_open = false;
+            self.permission_menu_open = false;
+            self.slash_menu = None;
+            self.load_context_catalog(cx);
         }
+        self.prompt_focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 
     pub(super) fn attach_files(&mut self, cx: &mut Context<Self>) {
         self.context_menu_open = false;
+        self.context_catalog.cancel();
         let selection = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: true,
             multiple: true,
             prompt: Some(crate::i18n::text("添加文件或文件夹").into()),
         });
+        let revision = self.draft_revision;
+        let cwd = self.conversation.cwd.clone();
+        let thread = self.thread_id().map(str::to_owned);
+        let generation = self.conversation.runtime.generation;
         cx.spawn(async move |this, cx| {
-            let paths = selection
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .flatten()
-                .unwrap_or_default();
+            let result = selection.await;
             let _ = this.update(cx, |this, cx| {
-                this.attach_paths(paths, cx);
+                if this.draft_revision != revision
+                    || this.conversation.cwd != cwd
+                    || this.thread_id() != thread.as_deref()
+                    || this.conversation.runtime.generation != generation
+                {
+                    return;
+                }
+                match result {
+                    Ok(Ok(Some(paths))) => this.attach_paths(paths, cx),
+                    Ok(Ok(None)) => {
+                        this.focus_prompt_pending = true;
+                        cx.notify();
+                    }
+                    error => {
+                        let message = match error {
+                            Ok(Err(e)) => e.to_string(),
+                            Err(e) => e.to_string(),
+                            _ => unreachable!(),
+                        };
+                        this.show_toast(super::ToastKind::Danger, message, cx);
+                        this.focus_prompt_pending = true;
+                    }
+                }
             });
         })
         .detach();
@@ -226,141 +249,5 @@ impl ComposerView {
         self.prompt_context.files.retain(|file| file.path != path);
         self.focus_prompt_pending = true;
         cx.notify();
-    }
-
-    pub(super) fn render_context_menu(
-        &self,
-        theme: Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let item = |id, label: &'static str, glyph: &'static str| {
-            div()
-                .id(id)
-                .role(Role::MenuItem)
-                .aria_label(label)
-                .focusable()
-                .tab_stop(true)
-                .w_full()
-                .h(px(28.5703))
-                .px(px(8.0))
-                .rounded(px(6.0))
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .cursor_pointer()
-                .text_size(px(13.0))
-                .text_color(theme.text)
-                .hover(move |s| s.bg(theme.sidebar_hover))
-                .focus_visible(move |s| s.bg(theme.sidebar_hover))
-                .child(icon(glyph, theme.text_secondary.into()).size(px(16.0)))
-                .child(label)
-        };
-        deferred(
-            div()
-                .id("side-chat-context-menu")
-                .role(Role::Menu)
-                .key_context("ComposerContextMenu")
-                .on_action(
-                    cx.listener(|this, _: &super::DismissContextMenu, window, cx| {
-                        this.context_menu_open = false;
-                        this.context_focus_pending = false;
-                        this.prompt_focus_handle(cx).focus(window, cx);
-                        cx.notify();
-                        cx.stop_propagation();
-                    }),
-                )
-                .track_focus(&self.context_focus)
-                .absolute()
-                .bottom(px(50.0))
-                .left(px(8.0))
-                .w(px(self
-                    .available_width
-                    .map_or(280.0, |width| (width - 16.0).clamp(200.0, 280.0))))
-                .rounded(px(12.0))
-                .p(px(4.0))
-                .bg(theme.model_picker_surface)
-                .border(px(0.5))
-                .border_color(theme.border)
-                .shadow_md()
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.context_menu_open = false;
-                    cx.notify();
-                }))
-                .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
-                    match e.keystroke.key.as_str() {
-                        "escape" => {
-                            this.context_menu_open = false;
-                            this.prompt_focus_handle(cx).focus(window, cx);
-                        }
-                        "down" | "tab" => window.focus_next(cx),
-                        "up" => window.focus_prev(cx),
-                        "enter" | "space" => this.attach_files(cx),
-                        _ => return,
-                    }
-                    cx.notify();
-                    cx.stop_propagation();
-                }))
-                .child(
-                    div()
-                        .px(px(8.0))
-                        .h(px(26.0))
-                        .flex()
-                        .items_center()
-                        .text_size(px(12.0))
-                        .text_color(theme.text_tertiary)
-                        .child(crate::i18n::text("添加")),
-                )
-                .child(
-                    item(
-                        "side-chat-add-files",
-                        crate::i18n::text("文件和文件夹"),
-                        "utility-folder",
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.attach_files(cx);
-                        cx.stop_propagation();
-                    }))
-                    .on_key_down(cx.listener(
-                        |this, e: &KeyDownEvent, _, cx| {
-                            if matches!(e.keystroke.key.as_str(), "enter" | "space") {
-                                this.attach_files(cx);
-                                cx.stop_propagation();
-                            }
-                        },
-                    )),
-                )
-                .when(self.plan_mode_available(), |menu| {
-                    menu.child(
-                        item(
-                            "side-chat-plan-mode",
-                            crate::i18n::text("计划模式"),
-                            "panel-review",
-                        )
-                        .child(div().flex_1())
-                        .when(self.prompt_context.plan_mode == Some(true), |d| {
-                            d.child(icon("check", theme.text.into()).size(px(14.0)))
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.prompt_context.plan_mode =
-                                Some(this.prompt_context.plan_mode != Some(true));
-                            this.context_menu_open = false;
-                            cx.notify();
-                            cx.stop_propagation();
-                        }))
-                        .on_key_down(cx.listener(
-                            |this, e: &KeyDownEvent, _, cx| {
-                                if matches!(e.keystroke.key.as_str(), "enter" | "space") {
-                                    this.prompt_context.plan_mode =
-                                        Some(this.prompt_context.plan_mode != Some(true));
-                                    this.context_menu_open = false;
-                                    cx.notify();
-                                    cx.stop_propagation();
-                                }
-                            },
-                        )),
-                    )
-                }),
-        )
-        .with_priority(20)
     }
 }

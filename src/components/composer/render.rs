@@ -32,6 +32,7 @@ impl ComposerView {
         let composer_width = self.available_width.unwrap_or(viewport_width);
         let compact = composer_width < 430.0;
         let model_trigger_bounds = self.model_trigger_bounds.clone();
+        let context_trigger_bounds = self.context_catalog.trigger_bounds.clone();
         let trigger_label = div()
             .min_w(px(0.0))
             .flex()
@@ -96,12 +97,12 @@ impl ComposerView {
             // ⌘Z undoes the composer text first, then restores the last
             // removed queued message, as the reference's app undo does.
             .capture_action(cx.listener(|this, _: &crate::components::file_editor::EditorTab, _, cx| {
-                if this.slash_menu_key("tab", false, cx) {
+                if this.context_menu_key("tab", false, cx) || this.slash_menu_key("tab", false, cx) {
                     cx.stop_propagation();
                 }
             }))
             .capture_action(cx.listener(|this, _: &crate::app::DismissPermissionUi, _, cx| {
-                if this.slash_menu_key("escape", false, cx) {
+                if this.context_menu_key("escape", false, cx) || this.slash_menu_key("escape", false, cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -124,7 +125,7 @@ impl ComposerView {
                 // the Fn flag. It does not change slash-menu navigation.
                 let plain = !modifiers.control && !modifiers.platform && !modifiers.alt && !modifiers.shift;
                 if (plain || ctrl_only)
-                    && this.slash_menu_key(event.keystroke.key.as_str(), ctrl_only, cx)
+                    && (this.context_menu_key(event.keystroke.key.as_str(), ctrl_only, cx) || this.slash_menu_key(event.keystroke.key.as_str(), ctrl_only, cx))
                 {
                     cx.stop_propagation();
                     return;
@@ -253,6 +254,7 @@ impl ComposerView {
                                         .child(
                                             div()
                                                 .id("composer-add-context")
+                                                .relative()
                                                 .flex_none()
                                                 .role(gpui::Role::Button)
                                                 .aria_label(crate::i18n::text("添加文件等内容"))
@@ -267,9 +269,12 @@ impl ComposerView {
                                                 .justify_center()
                                                 .cursor_pointer()
                                                 .hover(move |style| style.bg(theme.sidebar_hover))
+                                                .active(move |style| style.bg(theme.sidebar_hover))
+                                                .when(self.context_menu_open, |d| d.bg(theme.sidebar_hover))
                                                 .child(
                                                     icon("add", theme.text.into()).size(px(16.0)),
-                                                ),
+                                                )
+                                                .child(canvas(move |bounds,_,_| context_trigger_bounds.set(Some(bounds)),|_,(),_,_|{}).absolute().inset_0().size_full()),
                                         )
                                         .when(self.permission_ui_enabled, |controls| {
                                             controls.child(
@@ -805,12 +810,6 @@ impl Render for ComposerView {
         if self.focus_prompt_pending {
             self.prompt_focus_handle(cx).focus(window, cx);
             self.focus_prompt_pending = false;
-        }
-        if self.context_focus_pending {
-            self.context_focus_pending = false;
-            if self.context_menu_open {
-                self.context_focus.focus(window, cx);
-            }
         }
         self.render_composer(
             f32::from(window.viewport_size().width),

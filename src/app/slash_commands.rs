@@ -57,6 +57,63 @@ impl ChatApp {
         .detach();
         cx.subscribe(
             composer,
+            |this, composer, _: &crate::components::composer::ContextSourcesRequested, cx| {
+                let tabs = this
+                    .browser_panels
+                    .get(&this.active_conversation)
+                    .map(|panel| panel.read(cx).context_tabs())
+                    .unwrap_or_default();
+                composer.update(cx, |composer, cx| {
+                    composer.set_context_browser_tabs(tabs, cx)
+                });
+            },
+        )
+        .detach();
+        cx.subscribe(
+            composer,
+            |this, composer, event: &crate::components::composer::AttachBrowserContext, cx| {
+                let Some(panel) = this.browser_panels.get(&this.active_conversation) else {
+                    return;
+                };
+                let cwd = composer.read(cx).conversation_cwd();
+                let thread = composer.read(cx).thread_id().map(str::to_owned);
+                let weak = composer.downgrade();
+                let mut async_cx = cx.to_async();
+                panel.read(cx).collect_context(event.0, move |result| {
+                    let result = result.and_then(|text| {
+                        let root = std::env::var_os("CODEX_HOME")
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_else(|| {
+                                std::path::PathBuf::from(
+                                    std::env::var_os("HOME").unwrap_or_default(),
+                                )
+                                .join(".codex")
+                            })
+                            .join("attachments");
+                        std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+                        let path = root.join(format!(
+                            "browser-context-{}.json",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_nanos()
+                        ));
+                        std::fs::write(&path, text).map_err(|e| e.to_string())?;
+                        Ok(path)
+                    });
+                    let _ = weak.update(&mut async_cx, |composer, cx| {
+                        if composer.conversation_cwd() == cwd
+                            && composer.thread_id() == thread.as_deref()
+                        {
+                            composer.attach_browser_context_result(result, cx);
+                        }
+                    });
+                });
+            },
+        )
+        .detach();
+        cx.subscribe(
+            composer,
             |this, composer, _: &crate::components::composer::FeedbackContextRequested, cx| {
                 let diagnostics = this
                     .browser_panels

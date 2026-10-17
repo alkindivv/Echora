@@ -5,7 +5,11 @@ mod auto_review;
 mod background;
 mod capture;
 mod context;
+mod context_catalog;
+mod context_menu;
+mod context_thread;
 pub use context::OpenAttachmentPreview;
+pub use context_catalog::{AttachBrowserContext, ContextBrowserTab, ContextSourcesRequested};
 mod dialogs;
 mod dictation;
 mod followup;
@@ -151,7 +155,6 @@ impl gpui::EventEmitter<ReviewCommentsRestored> for ComposerView {}
 gpui::actions!(
     composer,
     [
-        DismissContextMenu,
         DismissModelPicker,
         DismissProjectPicker,
         DismissWorkspaceMenu
@@ -175,8 +178,7 @@ pub struct ComposerView {
     trailing_margin: Option<f32>,
     prompt_context: crate::agent::AgentPromptContext,
     context_menu_open: bool,
-    context_focus: FocusHandle,
-    context_focus_pending: bool,
+    context_catalog: context_catalog::ContextCatalog,
     focus_prompt_pending: bool,
     review_comments: Vec<crate::git_review::ReviewComment>,
     draft_revision: u64,
@@ -296,11 +298,6 @@ impl ComposerView {
     ) -> Self {
         cx.bind_keys([gpui::KeyBinding::new(
             "escape",
-            DismissContextMenu,
-            Some("ComposerContextMenu"),
-        )]);
-        cx.bind_keys([gpui::KeyBinding::new(
-            "escape",
             DismissModelPicker,
             Some("ComposerModelPicker"),
         )]);
@@ -342,20 +339,24 @@ impl ComposerView {
                     crate::components::file_editor::EditorEvent::Changed => {
                         this.draft_revision = this.draft_revision.wrapping_add(1);
                         this.prompt_context.references = editor.read(cx).references().to_vec();
+                        this.update_context_query(cx);
                         this.update_slash_menu(cx);
                     }
                     crate::components::file_editor::EditorEvent::Submit => {
                         // Enter picks the highlighted slash command instead.
-                        if !this.slash_menu_enter(cx) {
+                        if !this.context_menu_key("enter", false, cx) && !this.slash_menu_enter(cx)
+                        {
                             this.submit_prompt(editor.read(cx).text().to_owned(), cx);
                         }
                     }
                     crate::components::file_editor::EditorEvent::SubmitInverted => {
-                        if !this.slash_menu_enter(cx) {
+                        if !this.context_menu_key("enter", false, cx) && !this.slash_menu_enter(cx)
+                        {
                             this.submit_prompt_as(editor.read(cx).text().to_owned(), true, cx);
                         }
                     }
                     crate::components::file_editor::EditorEvent::SelectionChanged => {
+                        this.update_context_query(cx);
                         this.update_slash_menu(cx)
                     }
                     crate::components::file_editor::EditorEvent::Save => {}
@@ -453,8 +454,7 @@ impl ComposerView {
             trailing_margin: None,
             prompt_context: Default::default(),
             context_menu_open: false,
-            context_focus: cx.focus_handle(),
-            context_focus_pending: false,
+            context_catalog: context_catalog::ContextCatalog::default(),
             focus_prompt_pending: false,
             review_comments: Vec::new(),
             draft_revision: 0,
@@ -777,13 +777,15 @@ impl ComposerView {
                 if runtime.generation > self.conversation.runtime.generation =>
             {
                 self.command_catalog.invalidate();
+                self.context_catalog.cancel();
+                self.context_menu_open = false;
                 self.slash_menu = None;
             }
             AgentConnectionEvent::SkillsChanged { generation }
                 if *generation >= self.conversation.runtime.generation =>
             {
                 self.command_catalog.invalidate();
-                if self.slash_menu_open(cx) {
+                if self.slash_menu_open(cx) || self.context_menu_open {
                     self.ensure_command_skills(cx);
                 }
             }

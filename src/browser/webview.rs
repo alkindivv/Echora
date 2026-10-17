@@ -261,6 +261,11 @@ impl WebView {
         forward!(self, view => view.clear_find())
     }
 
+    /// Visible page text and URL, collected only when explicitly attached.
+    pub fn context_text(&self, done: impl FnOnce(Option<String>) + 'static) {
+        forward!(self, view => view.context_text(Box::new(done)))
+    }
+
     /// Copies what the page shows to the clipboard as an image.
     pub fn copy_snapshot(&self, done: impl FnOnce(bool) + 'static) {
         forward!(self, view => view.copy_snapshot(Box::new(done)))
@@ -446,6 +451,10 @@ mod headless {
         }
 
         pub fn clear_find(&self) {}
+
+        pub fn context_text(&self, done: Box<dyn FnOnce(Option<String>)>) {
+            done(None);
+        }
 
         pub fn copy_snapshot(&self, done: Box<dyn FnOnce(bool)>) {
             done(false);

@@ -1324,6 +1324,42 @@ impl BrowserPanel {
         });
     }
 
+    pub fn context_tabs(&self) -> Vec<crate::components::composer::ContextBrowserTab> {
+        self.tabs
+            .iter()
+            .filter(|tab| !tab.url.is_empty())
+            .map(|tab| crate::components::composer::ContextBrowserTab {
+                id: tab.id,
+                title: tab.page_title(),
+                url: tab.url.clone(),
+            })
+            .collect()
+    }
+
+    pub fn collect_context(&self, id: u64, done: impl FnOnce(Result<String, String>) + 'static) {
+        let Some(tab) = self.tabs.iter().find(|tab| tab.id == id) else {
+            done(Err(crate::i18n::format!("标签页已关闭"=>"Tab was closed")));
+            return;
+        };
+        let Some(view) = tab.view.as_ref() else {
+            done(Err(
+                crate::i18n::format!("页面尚未加载"=>"Page has not loaded"),
+            ));
+            return;
+        };
+        if tab.loading || tab.error.is_some() {
+            done(Err(
+                crate::i18n::format!("请等待页面加载后再附加"=>"Wait for the page to load before attaching"),
+            ));
+            return;
+        }
+        view.context_text(move |text| {
+            done(text.ok_or_else(
+                || crate::i18n::format!("无法读取浏览器页面"=>"Unable to read browser page"),
+            ))
+        });
+    }
+
     /// Diagnostics are collected only after the user opens the feedback form.
     pub fn feedback_diagnostics(&self) -> serde_json::Value {
         serde_json::json!({"tabs":self.tabs.iter().map(|tab|serde_json::json!({"title":tab.page_title(),"url":tab.url,"loading":tab.loading,"error":tab.error.as_ref().map(|error|format!("{:?}",error.page))})).collect::<Vec<_>>()})

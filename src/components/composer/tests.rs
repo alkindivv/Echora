@@ -3973,7 +3973,7 @@ fn composer_attachment_menu_returns_focus_to_the_editor_with_escape() {
     assert!(window.read(|c, _| c.context_menu_open));
     window.update(|c, w, cx| {
         c.prompt_editor.update(cx, |editor, cx| {
-            assert!(!gpui::EntityInputHandler::accepts_text_input(editor, w, cx));
+            assert!(gpui::EntityInputHandler::accepts_text_input(editor, w, cx));
         })
     });
     window.simulate_keystroke("escape");

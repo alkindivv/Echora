@@ -463,6 +463,16 @@ impl NativeWebView {
         }
     }
 
+    pub fn context_text(&self, done: Box<dyn FnOnce(Option<String>)>) {
+        unsafe {
+            evaluate(
+                self.web_view,
+                "JSON.stringify({title:document.title,url:location.href,text:(document.body?.innerText??'').slice(0,120000),selection:getSelection()?.toString()??''})",
+                done,
+            );
+        }
+    }
+
     pub fn copy_snapshot(&self, done: Box<dyn FnOnce(bool)>) {
         unsafe {
             take_snapshot(self.web_view, move |image| {

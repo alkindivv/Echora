@@ -31,6 +31,8 @@ pub(super) fn encode_input(prompt: &str, context: &AgentPromptContext) -> Result
         at = reference.range.end;
         let kind = match reference.kind {
             crate::agent::AgentInputReferenceKind::Skill => "skill",
+            crate::agent::AgentInputReferenceKind::Plugin
+            | crate::agent::AgentInputReferenceKind::Thread => "mention",
             crate::agent::AgentInputReferenceKind::Mention => "mention",
         };
         let input = json!({"type": kind, "name": reference.name, "path": reference.path});
@@ -165,6 +167,17 @@ fn reference_link(reference: &crate::agent::AgentInputReference) -> String {
     } else {
         "@"
     };
+    if matches!(
+        reference.kind,
+        crate::agent::AgentInputReferenceKind::Plugin
+            | crate::agent::AgentInputReferenceKind::Thread
+    ) {
+        return format!(
+            "[@{}]({})",
+            escape(&reference.name),
+            escape(&reference.path)
+        );
+    }
     format!(
         "[{}{}](<{}>)",
         marker,
@@ -243,14 +256,28 @@ pub(super) fn restore_references(
             let Some(link) = text.get(range.clone()) else {
                 continue;
             };
-            let Some((name, _)) = link.strip_prefix("[$").and_then(|s| s.split_once("](")) else {
+            let (name, kind) = if let Some((name, _)) =
+                link.strip_prefix("[$").and_then(|s| s.split_once("]("))
+            {
+                let path = std::path::Path::new(dest_url.as_ref());
+                if !path.is_absolute() || path.file_name().is_none_or(|s| s != "SKILL.md") {
+                    continue;
+                }
+                (name, crate::agent::AgentInputReferenceKind::Skill)
+            } else if let Some((name, _)) = link.strip_prefix("[@").and_then(|s| s.split_once("]("))
+            {
+                let kind = if dest_url.starts_with("plugin://") {
+                    crate::agent::AgentInputReferenceKind::Plugin
+                } else if dest_url.starts_with("thread://") {
+                    crate::agent::AgentInputReferenceKind::Thread
+                } else {
+                    continue;
+                };
+                (name, kind)
+            } else {
                 continue;
             };
-            let path = std::path::Path::new(dest_url.as_ref());
-            if name.is_empty()
-                || !path.is_absolute()
-                || path.file_name().is_none_or(|s| s != "SKILL.md")
-            {
+            if name.is_empty() {
                 continue;
             }
             let reference = crate::agent::AgentInputReference {
@@ -258,7 +285,7 @@ pub(super) fn restore_references(
                 name: name.into(),
                 label: name.into(),
                 path: dest_url.to_string(),
-                kind: crate::agent::AgentInputReferenceKind::Skill,
+                kind,
             };
             if reference_link(&reference) == link
                 && !replacements
@@ -374,5 +401,44 @@ mod tests {
             json!({"type":"text","text":"你好","text_elements":[{"byteRange":{"start":1,"end":3},"placeholder":"x"}]}),
         ];
         assert!(restore_references(&content).is_err());
+    }
+}
+
+#[cfg(test)]
+mod context_reference_tests {
+    use super::*;
+    use crate::agent::{AgentInputReference, AgentInputReferenceKind};
+    #[test]
+    fn plugin_and_local_chat_references_round_trip_without_duplicate_typed_inputs() {
+        let text = "Documents and previous chat";
+        let context = AgentPromptContext {
+            references: vec![
+                AgentInputReference {
+                    range: 0..9,
+                    name: "Documents".into(),
+                    label: "Documents".into(),
+                    path: "plugin://documents@openai-primary-runtime".into(),
+                    kind: AgentInputReferenceKind::Plugin,
+                },
+                AgentInputReference {
+                    range: 14..27,
+                    name: "previous chat".into(),
+                    label: "previous chat".into(),
+                    path: "thread://local-chat?hostId=local".into(),
+                    kind: AgentInputReferenceKind::Thread,
+                },
+            ],
+            ..Default::default()
+        };
+        let wire = encode_input(text, &context).unwrap();
+        assert_eq!(wire.as_array().unwrap().len(), 1);
+        assert_eq!(wire[0]["text_elements"], json!([]));
+        assert_eq!(
+            wire[0]["text"],
+            "[@Documents](plugin://documents@openai-primary-runtime) and [@previous chat](thread://local-chat?hostId=local)"
+        );
+        let (restored, refs) = restore_references(wire.as_array().unwrap()).unwrap();
+        assert_eq!(restored, text);
+        assert_eq!(refs, context.references);
     }
 }
