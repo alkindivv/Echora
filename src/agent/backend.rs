@@ -165,6 +165,11 @@ pub struct AgentInputReference {
     pub path: String,
     pub label: String,
     pub kind: AgentInputReferenceKind,
+    /// Optional presentation hints, retained locally and never encoded as RPC fields.
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub brand_color: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

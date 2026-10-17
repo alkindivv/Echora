@@ -1588,3 +1588,54 @@ fn a_long_goal_objective_is_sent_as_a_file_pointer_and_edited_as_its_text() {
     assert_eq!(opened.lock().unwrap().as_deref(), Some(long.as_str()));
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn mention_identity_and_presentation_survive_queue_edit_rejection_and_steering() {
+    use crate::agent::{AgentInputReference, AgentInputReferenceKind};
+    let reference = AgentInputReference {
+        range: 0..3,
+        name: "PDF".into(),
+        label: "PDF".into(),
+        path: "plugin://pdf@local".into(),
+        kind: AgentInputReferenceKind::Plugin,
+        icon: Some("/tmp/pdf.png".into()),
+        brand_color: Some("#DC2626".into()),
+    };
+    let mut f = Fixture::new(FollowUpMode::Queue);
+    f.run_turn();
+    f.with(|c, cx| {
+        c.prompt_editor
+            .update(cx, |e, cx| e.insert_reference(0..0, reference.clone(), cx));
+    });
+    f.settle();
+    f.with(|c, cx| c.submit_prompt(c.prompt_text(cx).to_owned(), cx));
+    let (request, reply) = f.backend.script.lock().unwrap().adds.remove(0);
+    assert_eq!(request.context.references, vec![reference.clone()]);
+    let mut row = submission("mention-row", &request.client_message_id);
+    row.text = request.prompt.clone();
+    row.references = request.context.references.clone();
+    reply.send_blocking(Ok(row)).unwrap();
+    f.settle();
+    f.with(|c, cx| c.edit_queued("mention-row", cx));
+    f.answer_delete("mention-row", true);
+    f.with(|c, cx| {
+        assert_eq!(
+            c.prompt_editor.read(cx).references(),
+            std::slice::from_ref(&reference)
+        );
+        c.submit_prompt(c.prompt_text(cx).to_owned(), cx);
+    });
+    let (_, reply) = f.backend.script.lock().unwrap().adds.remove(0);
+    reply.send_blocking(Err("rejected".into())).unwrap();
+    f.settle();
+    f.with(|c, cx| {
+        assert_eq!(c.prompt_text(cx), "PDF ");
+        assert_eq!(
+            c.prompt_editor.read(cx).references(),
+            std::slice::from_ref(&reference)
+        );
+        c.submit_prompt_as(c.prompt_text(cx).to_owned(), true, cx);
+    });
+    let (request, _) = f.backend.script.lock().unwrap().steers.remove(0);
+    assert_eq!(request.context.references, vec![reference]);
+}

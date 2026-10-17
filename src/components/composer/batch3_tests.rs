@@ -1090,3 +1090,133 @@ fn add_picker_file_result_survives_its_query_edit_and_cancel_keeps_draft(
         assert_eq!(c.prompt_context.files.len(), 1);
     });
 }
+
+#[test]
+fn mention_in_the_middle_replaces_only_the_token_and_rejects_stale_workspace_results() {
+    let mut f = Fixture::new(None);
+    f.type_text("before @docs after");
+    f.with(|c, cx| {
+        c.prompt_editor
+            .update(cx, |e, cx| e.replace_range(12..12, "", cx))
+    });
+    f.settle();
+    let old = f.backend.script.lock().unwrap().plugins.remove(0);
+    f.with(|c, cx| {
+        assert!(c.context_menu_open);
+        assert_eq!(c.context_catalog.query, "docs");
+        c.command_catalog.skills = vec![command_skill("docs", true)];
+        let row = c
+            .context_rows(cx)
+            .iter()
+            .position(|r| r.title == "工具 docs")
+            .unwrap();
+        c.select_context_row(row, cx);
+    });
+    f.settle();
+    f.with(|c, cx| {
+        assert_eq!(c.prompt_text(cx), "before 工具 docs  after");
+        let r = &c.prompt_context.references[0];
+        assert_eq!(&c.prompt_text(cx)[r.range.clone()], "工具 docs");
+        assert_eq!(r.path, "/skills/docs/SKILL.md");
+        assert!(!c.context_menu_open);
+        c.prompt_editor
+            .update(cx, |e, cx| e.replace_range(e.cursor()..e.cursor(), "@", cx));
+    });
+    f.settle();
+    f.with(|c, cx| c.set_workspace_context("/tmp/other".into(), None, Some("other".into()), cx));
+    old.send_blocking(Err(crate::agent::AgentPluginsError {
+        kind: crate::agent::AgentPluginsErrorKind::Connection,
+        message: "old failure".into(),
+        data: None,
+        outcome_unknown: false,
+    }))
+    .unwrap();
+    f.settle();
+    f.with(|c, _| {
+        assert!(!c.context_menu_open);
+        assert!(c.context_catalog.error.is_none());
+    });
+    assert!(f.backend.log().is_empty());
+}
+
+#[gpui::test]
+fn rendered_mentions_handle_escape_caret_ime_and_tab_without_submitting(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gpui::EntityInputHandler;
+    cx.update(crate::components::file_editor::init);
+    let (harness, window) = Harness::open(cx);
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|w, cx| {
+        let c = w.root::<ComposerView>().flatten().unwrap();
+        c.read(cx).prompt_focus_handle(cx).focus(w, cx);
+    });
+    visual.update(|w, cx| w.draw(cx).clear(cx));
+    visual.simulate_input("hello @");
+    visual.run_until_parked();
+    visual.update(|w, cx| {
+        assert!(
+            w.root::<ComposerView>()
+                .flatten()
+                .unwrap()
+                .read(cx)
+                .context_menu_open
+        )
+    });
+    visual.simulate_keystrokes("escape");
+    visual.simulate_input("docs");
+    visual.run_until_parked();
+    visual.update(|w, cx| {
+        let c = w.root::<ComposerView>().flatten().unwrap();
+        assert!(!c.read(cx).context_menu_open);
+        assert_eq!(c.read(cx).prompt_text(cx), "hello @docs");
+    });
+    visual.simulate_keystrokes("left");
+    visual.run_until_parked();
+    visual.update(|w, cx| {
+        let c = w.root::<ComposerView>().flatten().unwrap();
+        c.update(cx, |c, cx| {
+            assert_eq!(c.context_catalog.query, "doc");
+            assert!(c.context_menu_open);
+            c.prompt_editor.update(cx, |e, cx| {
+                e.replace_and_mark_text_in_range(Some(6..11), "@文", Some(2..2), w, cx)
+            });
+        });
+    });
+    visual.run_until_parked();
+    visual.simulate_keystrokes("enter");
+    visual.update(|w, cx| {
+        let c = w.root::<ComposerView>().flatten().unwrap();
+        c.update(cx, |c, cx| {
+            assert!(!c.context_menu_open);
+            assert!(c.prompt_editor.read(cx).composing());
+            c.prompt_editor
+                .update(cx, |e, cx| e.replace_text_in_range(None, "@sketch", w, cx));
+        });
+    });
+    visual.run_until_parked();
+    visual.update(|w, cx| w.draw(cx).clear(cx));
+    visual.simulate_event(gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke {
+            key: "tab".into(),
+            modifiers: gpui::Modifiers {
+                function: true,
+                ..Default::default()
+            },
+            key_char: None,
+        },
+        is_held: false,
+        prefer_character_input: false,
+    });
+    visual.run_until_parked();
+    visual.update(|w, cx| {
+        let c = w.root::<ComposerView>().flatten().unwrap();
+        assert!(c.read(cx).sketch.open);
+        assert_eq!(c.read(cx).prompt_text(cx), "hello ");
+        assert!(!c.read(cx).context_menu_open);
+    });
+    assert!(
+        harness.backend.log().is_empty(),
+        "navigation and IME confirmation must not submit"
+    );
+}

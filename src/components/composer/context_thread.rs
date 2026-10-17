@@ -52,7 +52,7 @@ impl ComposerView {
                 if this.draft_revision!=revision || this.conversation.cwd!=cwd || this.thread_id()!=thread.as_deref() || this.conversation.runtime.generation!=generation {return;}
                 match result {
                     Ok(path)=>{
-                        this.prompt_editor.update(cx,|e,cx|e.insert_reference(range,AgentInputReference {range:0..0,name:title.clone(),label:title,path:format!("thread://{id}?hostId=local"),kind:AgentInputReferenceKind::Thread},cx));
+                        this.prompt_editor.update(cx,|e,cx|e.insert_reference(range,AgentInputReference {range:0..0,name:title.clone(),label:title,path:format!("thread://{id}?hostId=local"),kind:AgentInputReferenceKind::Thread,icon:None,brand_color:None},cx));
                         this.prompt_context.references=this.prompt_editor.read(cx).references().to_vec();
                         this.attach_paths(vec![path],cx);
                     }

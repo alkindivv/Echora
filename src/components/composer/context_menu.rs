@@ -73,7 +73,7 @@ impl ComposerView {
                         cx.stop_propagation();
                     }))
                     .child(if let Some(path) = artwork {
-                        gpui::img(path).size(px(16.)).flex_none().into_any_element()
+                        crate::components::icons::package_icon(path, theme.text.into())
                     } else {
                         icon(glyph, theme.text.into())
                             .size(px(16.))

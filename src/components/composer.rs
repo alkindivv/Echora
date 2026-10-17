@@ -8,8 +8,10 @@ mod context;
 mod context_catalog;
 mod context_menu;
 mod context_thread;
+mod mentions;
 pub use context::OpenAttachmentPreview;
 pub use context_catalog::{AttachBrowserContext, ContextBrowserTab, ContextSourcesRequested};
+pub use mentions::InspectInputReference;
 mod dialogs;
 mod dictation;
 mod followup;
@@ -339,7 +341,7 @@ impl ComposerView {
                     crate::components::file_editor::EditorEvent::Changed => {
                         this.draft_revision = this.draft_revision.wrapping_add(1);
                         this.prompt_context.references = editor.read(cx).references().to_vec();
-                        this.update_context_query(cx);
+                        this.update_mentions(false, cx);
                         this.update_slash_menu(cx);
                     }
                     crate::components::file_editor::EditorEvent::Submit => {
@@ -356,12 +358,19 @@ impl ComposerView {
                         }
                     }
                     crate::components::file_editor::EditorEvent::SelectionChanged => {
-                        this.update_context_query(cx);
+                        this.update_mentions(true, cx);
                         this.update_slash_menu(cx)
                     }
                     crate::components::file_editor::EditorEvent::Save => {}
                 }
                 cx.notify();
+            },
+        )
+        .detach();
+        cx.subscribe(
+            &prompt_editor,
+            |_, _, event: &crate::components::file_editor::ReferenceActivated, cx| {
+                cx.emit(InspectInputReference(event.0.clone()));
             },
         )
         .detach();
@@ -627,6 +636,10 @@ impl ComposerView {
     /// Writes text into the composer without sending it; the Pull Requests page
     /// uses this when `Chat` starts a conversation for a pull request.
     pub fn set_draft_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.context_menu_open = false;
+        self.context_catalog.cancel();
+        self.context_catalog.mention_start = None;
+        self.context_catalog.mention_dismissed = None;
         self.prompt_editor
             .update(cx, |editor, cx| editor.set_text_silently(text, cx));
         self.prompt_context.references.clear();
@@ -684,7 +697,14 @@ impl ComposerView {
         thread_id: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        if self.conversation.cwd != cwd || self.conversation.thread_id != thread_id {
+        if self.conversation.cwd != cwd
+            || self.conversation.thread_id != thread_id
+            || self.conversation.project_id != project_id
+        {
+            self.context_menu_open = false;
+            self.context_catalog.cancel();
+            self.context_catalog.mention_start = None;
+            self.context_catalog.mention_dismissed = None;
             self.permission_update_cycle = self.permission_update_cycle.wrapping_add(1);
             self.conversation.permission_change = None;
             self.permission_confirmation_selection = None;
@@ -774,10 +794,17 @@ impl ComposerView {
     ) -> bool {
         match &event {
             AgentConnectionEvent::Runtime(runtime)
-                if runtime.generation > self.conversation.runtime.generation =>
+                if runtime.generation > self.conversation.runtime.generation
+                    || (runtime.generation == self.conversation.runtime.generation
+                        && matches!(
+                            runtime.observation,
+                            crate::agent::AgentRuntimeObservation::Disconnected
+                        )) =>
             {
                 self.command_catalog.invalidate();
                 self.context_catalog.cancel();
+                self.context_catalog.mention_start = None;
+                self.context_catalog.mention_dismissed = None;
                 self.context_menu_open = false;
                 self.slash_menu = None;
             }

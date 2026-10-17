@@ -57,6 +57,40 @@ impl ChatApp {
         .detach();
         cx.subscribe(
             composer,
+            |this, composer, event: &crate::components::composer::InspectInputReference, cx| {
+                use crate::agent::AgentInputReferenceKind;
+                match event.0.kind {
+                    AgentInputReferenceKind::Plugin => {
+                        if let Some(id) = event.0.path.strip_prefix("plugin://") {
+                            this.open_settings(cx);
+                            this.settings
+                                .update(cx, |s, cx| s.inspect_plugin_reference(id.to_owned(), cx));
+                        }
+                    }
+                    AgentInputReferenceKind::Thread => {
+                        if let Some(id) = event
+                            .0
+                            .path
+                            .strip_prefix("thread://")
+                            .and_then(|s| s.split('?').next())
+                        {
+                            this.select_conversation(id.to_owned(), cx);
+                        }
+                    }
+                    AgentInputReferenceKind::Skill | AgentInputReferenceKind::Mention => {
+                        let path = std::path::PathBuf::from(&event.0.path);
+                        if path.is_absolute() {
+                            composer.update(cx, |_, cx| {
+                                cx.emit(crate::components::composer::OpenAttachmentPreview(path))
+                            });
+                        }
+                    }
+                }
+            },
+        )
+        .detach();
+        cx.subscribe(
+            composer,
             |this, composer, _: &crate::components::composer::ContextSourcesRequested, cx| {
                 let tabs = this
                     .browser_panels
@@ -77,6 +111,7 @@ impl ChatApp {
                 };
                 let cwd = composer.read(cx).conversation_cwd();
                 let thread = composer.read(cx).thread_id().map(str::to_owned);
+                let draft = composer.read(cx).draft_identity();
                 let weak = composer.downgrade();
                 let mut async_cx = cx.to_async();
                 panel.read(cx).collect_context(event.0, move |result| {
@@ -103,6 +138,7 @@ impl ChatApp {
                     });
                     let _ = weak.update(&mut async_cx, |composer, cx| {
                         if composer.conversation_cwd() == cwd
+                            && composer.draft_identity() == draft
                             && composer.thread_id() == thread.as_deref()
                         {
                             composer.attach_browser_context_result(result, cx);

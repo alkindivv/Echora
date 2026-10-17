@@ -199,3 +199,22 @@ fn config_warnings_are_listed_once_on_the_configuration_page() {
     assert_eq!(kept.first(), Some(&warning("warning 5")));
     assert_eq!(kept.last(), Some(&warning("warning 24")));
 }
+
+#[gpui::test]
+fn inspecting_a_composer_plugin_reference_renders_the_plugin_page(cx: &mut gpui::TestAppContext) {
+    let backend: std::sync::Arc<dyn AgentBackend> = std::sync::Arc::new(Backend::default());
+    let window = cx.add_window(|_, cx| SettingsView::new(ThemeMode::Dark, backend, cx));
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|w, cx| {
+        let settings = w.root::<SettingsView>().flatten().unwrap();
+        settings.update(cx, |s, cx| {
+            s.inspect_plugin_reference("pdf@local".into(), cx)
+        });
+    });
+    visual.run_until_parked();
+    visual.update(|w, cx| w.draw(cx).clear(cx));
+    assert!(
+        visual.debug_bounds("plugins-browse-directory").is_some(),
+        "A reference must navigate to the rendered plugin page, not the fallback settings page"
+    );
+}

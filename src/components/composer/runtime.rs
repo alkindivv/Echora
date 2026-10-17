@@ -398,6 +398,10 @@ impl ComposerView {
         draft: crate::conversation::SubmissionDraft,
         cx: &mut Context<Self>,
     ) {
+        self.context_menu_open = false;
+        self.context_catalog.cancel();
+        self.context_catalog.mention_start = None;
+        self.context_catalog.mention_dismissed = None;
         self.prompt_editor
             .update(cx, |editor, cx| editor.set_text_silently(&draft.text, cx));
         self.prompt_editor.update(cx, |editor, cx| {

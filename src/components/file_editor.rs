@@ -1,3 +1,5 @@
+mod reference_render;
+
 use std::{
     cell::Cell,
     ops::Range,
@@ -174,6 +176,9 @@ fn next(text: &str, offset: usize) -> usize {
         .map_or(offset, |g| offset + g.len())
 }
 
+pub struct ReferenceActivated(pub crate::agent::AgentInputReference);
+impl gpui::EventEmitter<ReferenceActivated> for FileEditor {}
+
 pub enum EditorEvent {
     Changed,
     SelectionChanged,
@@ -204,6 +209,8 @@ pub struct FileEditor {
     scroll: f32,
     bounds: Option<Bounds<Pixels>>,
     selecting: bool,
+    hovered_reference: Option<usize>,
+    reference_press: Option<(usize, Point<Pixels>)>,
     ensure_cursor: bool,
     desired_x: Option<f32>,
     last_input: Option<(Instant, usize)>,
@@ -272,6 +279,8 @@ impl FileEditor {
             scroll: 0.,
             bounds: None,
             selecting: false,
+            hovered_reference: None,
+            reference_press: None,
             ensure_cursor: false,
             desired_x: None,
             last_input: None,
@@ -353,6 +362,9 @@ impl FileEditor {
     /// The caret's byte offset.
     pub fn cursor(&self) -> usize {
         self.buffer.cursor
+    }
+    pub fn selection_is_empty(&self) -> bool {
+        self.buffer.selection().is_empty()
     }
     /// Replaces a byte range as one undoable edit, leaving the caret after
     /// the new text.
@@ -500,6 +512,8 @@ impl FileEditor {
         }
     }
     fn changed(&mut self, cx: &mut Context<Self>) {
+        self.hovered_reference = None;
+        self.reference_press = None;
         self.layout_dirty = true;
         self.ensure_cursor = true;
         self.desired_x = None;
@@ -822,6 +836,20 @@ impl FileEditor {
                 for (offset, g) in raw.grapheme_indices(true) {
                     let start = source + offset;
                     map.push((display.len(), start));
+                    if self
+                        .buffer
+                        .references
+                        .iter()
+                        .any(|r| r.range.start == start)
+                    {
+                        display.push_str(reference_render::ICON_SPACE);
+                        let mut run = window
+                            .text_style()
+                            .to_run(reference_render::ICON_SPACE.len());
+                        run.font = ui_font();
+                        runs.push(run);
+                        map.push((display.len(), start));
+                    }
                     while span_index + 1 < spans.len() && spans[span_index].0.end <= start {
                         span_index += 1;
                     }
@@ -853,13 +881,13 @@ impl FileEditor {
                         run.font.weight = gpui::FontWeight::MEDIUM;
                         run.color = theme.text_tertiary.into();
                     }
-                    if self
+                    if let Some(reference) = self
                         .buffer
                         .references
                         .iter()
-                        .any(|r| r.range.contains(&start))
+                        .find(|r| r.range.contains(&start))
                     {
-                        run.color = gpui::rgba(0x339cffff).into();
+                        run.color = reference_render::color(reference, self.mode).into();
                         run.font.weight = gpui::FontWeight::MEDIUM;
                     }
                     run.len = expanded.len();
@@ -899,6 +927,20 @@ impl FileEditor {
                         });
                     if f32::from(full.width() - full.x_for_index(start)) <= width {
                         end = display.len();
+                    }
+                    // Keep an inline reference on one row when it fits there;
+                    // exceptionally long labels still wrap without changing identity.
+                    if let Some((_, source_end)) = map.iter().find(|(d, _)| *d == end)
+                        && let Some(reference) = self
+                            .buffer
+                            .references
+                            .iter()
+                            .find(|r| r.range.start < *source_end && *source_end < r.range.end)
+                        && let Some((reference_start, _)) =
+                            map.iter().find(|(_, s)| *s == reference.range.start)
+                        && *reference_start > start
+                    {
+                        end = *reference_start;
                     }
                     let mut run_start = 0;
                     let row_runs = runs
@@ -1059,6 +1101,26 @@ impl FileEditor {
                 window,
                 cx,
             );
+            if let Some(reference) = self
+                .hovered_reference
+                .and_then(|i| self.buffer.references.get(i))
+                && reference.range.end > row.start()
+                && reference.range.start < row.end()
+            {
+                let left = row
+                    .line
+                    .x_for_index(row.display(reference.range.start.max(row.start())));
+                let right = row
+                    .line
+                    .x_for_index(row.display(reference.range.end.min(row.end())));
+                window.paint_quad(fill(
+                    Bounds::new(
+                        origin + point(left, px(self.line_height() - 2.)),
+                        size(right - left, px(1.)),
+                    ),
+                    reference_render::color(reference, self.mode),
+                ));
+            }
             if !self.read_only
                 && self.focus.is_focused(window)
                 && selection.is_empty()
@@ -1103,7 +1165,11 @@ impl Render for FileEditor {
             .relative()
             .size_full()
             .overflow_hidden()
-            .cursor(CursorStyle::IBeam)
+            .cursor(if self.hovered_reference.is_some() {
+                CursorStyle::PointingHand
+            } else {
+                CursorStyle::IBeam
+            })
             .key_context(if self.read_only {
                 "ApprovalPreview"
             } else {
@@ -1202,6 +1268,9 @@ impl Render for FileEditor {
                 MouseButton::Left,
                 cx.listener(|s, e: &gpui::MouseDownEvent, w, cx| {
                     s.focus.focus(w, cx);
+                    s.reference_press = (!e.modifiers.shift && e.click_count == 1)
+                        .then(|| s.reference_at(e.position).map(|i| (i, e.position)))
+                        .flatten();
                     s.reset_caret_blink();
                     let raw = s.offset_at(e.position);
                     let p = s.buffer.snap_reference(raw, raw >= s.buffer.cursor);
@@ -1249,7 +1318,18 @@ impl Render for FileEditor {
                     cx.notify();
                 }),
             )
+            .on_hover(cx.listener(|s, hovered, _, cx| {
+                if !hovered {
+                    s.hovered_reference = None;
+                    cx.notify();
+                }
+            }))
             .on_mouse_move(cx.listener(|s, e: &gpui::MouseMoveEvent, _, cx| {
+                let hover = s.reference_at(e.position);
+                if s.hovered_reference != hover {
+                    s.hovered_reference = hover;
+                    cx.notify();
+                }
                 if s.selecting {
                     if let Some(b) = s.bounds {
                         if e.position.y < b.top() {
@@ -1266,11 +1346,24 @@ impl Render for FileEditor {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|s, _, _, _| s.selecting = false),
+                cx.listener(|s, e: &gpui::MouseUpEvent, _, cx| {
+                    s.selecting = false;
+                    if let Some((index, position)) = s.reference_press.take()
+                        && (f32::from(e.position.x - position.x)).abs() < 3.
+                        && (f32::from(e.position.y - position.y)).abs() < 3.
+                        && s.reference_at(e.position) == Some(index)
+                        && let Some(reference) = s.buffer.references.get(index)
+                    {
+                        cx.emit(ReferenceActivated(reference.clone()));
+                    }
+                }),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|s, _, _, _| s.selecting = false),
+                cx.listener(|s, _, _, _| {
+                    s.selecting = false;
+                    s.reference_press = None;
+                }),
             )
             .on_scroll_wheel(cx.listener(|s, e: &gpui::ScrollWheelEvent, _, cx| {
                 if s.preview_collapsed {
@@ -1299,9 +1392,12 @@ impl Render for FileEditor {
                 let caret_visible_for_paint = caret_visible.clone();
                 let canvas = canvas(
                     move |b, w, cx| {
-                        entity.update(cx, |s, cx| s.prepare(b, w, cx));
+                        entity.update(cx, |s, cx| {
+                            s.prepare(b, w, cx);
+                            s.reference_icons(b, w, cx)
+                        })
                     },
-                    move |b, _, w, cx| {
+                    move |b, icons, w, cx| {
                         let caret_visible = caret_visible_for_paint.get();
                         paint_entity.update(cx, |s, cx| {
                             if !s.read_only {
@@ -1313,6 +1409,9 @@ impl Render for FileEditor {
                             }
                             s.paint(b, w, cx, caret_visible);
                         });
+                        for mut icon in icons {
+                            icon.paint(w, cx);
+                        }
                     },
                 )
                 .size_full();
@@ -1694,6 +1793,8 @@ mod reference_tests {
                 path: "/skills/OpenAI Docs/SKILL.md".into(),
                 label: "OpenAI Docs".into(),
                 kind: AgentInputReferenceKind::Skill,
+                icon: None,
+                brand_color: None,
             }],
             anchor: 7,
             cursor: 18,

@@ -157,6 +157,7 @@ pub(super) struct PluginsPanel {
     pub hover_row: Option<String>,
     /// Plugin whose detail read is on screen.
     pub open_plugin: Option<String>,
+    pub pending_reference: Option<String>,
     /// Pending confirmation, if any.
     pub confirmation: Option<PluginConfirmation>,
 }

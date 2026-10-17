@@ -26,6 +26,8 @@ impl gpui::EventEmitter<AttachBrowserContext> for ComposerView {}
 
 #[derive(Default)]
 pub(super) struct ContextCatalog {
+    pub mention_start: Option<usize>,
+    pub mention_dismissed: Option<usize>,
     pub cycle: u64,
     pub start: usize,
     pub query: String,
@@ -82,6 +84,13 @@ pub(super) struct ContextRow {
     pub group: &'static str,
 }
 impl ComposerView {
+    pub(crate) fn draft_identity(&self) -> (u64, u64, u64) {
+        (
+            self.draft_revision,
+            self.conversation.runtime.generation,
+            self.context_catalog.cycle,
+        )
+    }
     pub(crate) fn set_context_browser_tabs(
         &mut self,
         tabs: Vec<ContextBrowserTab>,
@@ -91,6 +100,7 @@ impl ComposerView {
         cx.notify();
     }
     pub(super) fn dismiss_context(&mut self, cx: &mut Context<Self>) {
+        self.context_catalog.mention_dismissed = self.context_catalog.mention_start;
         self.context_menu_open = false;
         self.context_catalog.cancel();
         self.focus_prompt_pending = true;
@@ -98,6 +108,7 @@ impl ComposerView {
     }
     pub(super) fn load_context_catalog(&mut self, cx: &mut Context<Self>) {
         self.context_catalog.cancel();
+        self.context_catalog.mention_start = None;
         self.context_catalog.plugins.clear();
         self.context_catalog.loading = true;
         self.context_catalog.error = None;
@@ -143,7 +154,10 @@ impl ComposerView {
     }
     pub(super) fn context_range(&self, cx: &gpui::App) -> Option<Range<usize>> {
         let editor = self.prompt_editor.read(cx);
-        let range = self.context_catalog.start..editor.cursor();
+        let range = self
+            .context_catalog
+            .mention_start
+            .unwrap_or(self.context_catalog.start)..editor.cursor();
         editor
             .text()
             .get(range.clone())
@@ -158,7 +172,17 @@ impl ComposerView {
             self.dismiss_context(cx);
             return;
         };
-        let query = self.prompt_editor.read(cx).text()[range].to_owned();
+        let query_start = range.start + usize::from(self.context_catalog.mention_start.is_some());
+        let Some(query) = self
+            .prompt_editor
+            .read(cx)
+            .text()
+            .get(query_start..range.end)
+            .map(str::to_owned)
+        else {
+            self.dismiss_context(cx);
+            return;
+        };
         if query == self.context_catalog.query {
             return;
         }
@@ -495,8 +519,10 @@ impl ComposerView {
         match row.action {
             ContextAction::Retry => {
                 let start = self.context_catalog.start;
+                let mention = self.context_catalog.mention_start;
                 self.retry_command_skills(cx);
                 self.load_context_catalog(cx);
+                self.context_catalog.mention_start = mention;
                 self.context_catalog.start = start;
                 self.update_context_query(cx);
             }
@@ -512,6 +538,8 @@ impl ComposerView {
             }
             ContextAction::Command(SlashCommand::Project) => {
                 self.remove_context_query(cx);
+                self.context_catalog.mention_start = None;
+                self.context_catalog.start = self.prompt_editor.read(cx).cursor();
                 self.context_catalog.project = true;
                 self.context_catalog.highlighted = 0;
                 self.context_catalog.query.clear();
@@ -555,6 +583,20 @@ impl ComposerView {
                             name: plugin.display_name().into(),
                             path: format!("plugin://{}", plugin.id),
                             kind: AgentInputReferenceKind::Plugin,
+                            icon: plugin.interface.as_ref().and_then(|i| {
+                                i.composer_icon
+                                    .as_ref()
+                                    .map(|p| p.display().to_string())
+                                    .or_else(|| i.composer_icon_url.clone())
+                                    .or_else(|| {
+                                        i.logo_source(self.mode == crate::theme::ThemeMode::Dark)
+                                            .map(str::to_owned)
+                                    })
+                            }),
+                            brand_color: plugin
+                                .interface
+                                .as_ref()
+                                .and_then(|i| i.brand_color.clone()),
                         },
                         cx,
                     );
@@ -572,6 +614,11 @@ impl ComposerView {
                             name: skill.name.clone(),
                             path: skill.path.display().to_string(),
                             kind: AgentInputReferenceKind::Skill,
+                            icon: skill.icon_path().map(|p| p.display().to_string()),
+                            brand_color: skill
+                                .interface
+                                .as_ref()
+                                .and_then(|i| i.brand_color.clone()),
                         },
                         cx,
                     );

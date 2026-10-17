@@ -256,9 +256,14 @@ impl ComposerView {
                         AgentInputReference {
                             range: Range::default(),
                             label: skill.display_name(),
-                            name: skill.name,
+                            name: skill.name.clone(),
                             path: skill.path.display().to_string(),
                             kind: AgentInputReferenceKind::Skill,
+                            icon: skill.icon_path().map(|p| p.display().to_string()),
+                            brand_color: skill
+                                .interface
+                                .as_ref()
+                                .and_then(|i| i.brand_color.clone()),
                         },
                         cx,
                     )

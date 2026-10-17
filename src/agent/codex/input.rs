@@ -216,6 +216,8 @@ pub(super) fn restore_references(
             path: path.into(),
             label: name.into(),
             kind,
+            icon: None,
+            brand_color: None,
         });
     }
     let mut replacements = Vec::new();
@@ -286,6 +288,8 @@ pub(super) fn restore_references(
                 label: name.into(),
                 path: dest_url.to_string(),
                 kind,
+                icon: None,
+                brand_color: None,
             };
             if reference_link(&reference) == link
                 && !replacements
@@ -340,6 +344,8 @@ mod tests {
                 path: "/Users/用户/My Skills/SKILL.md".into(),
                 label: "OpenAI Docs".into(),
                 kind: AgentInputReferenceKind::Skill,
+                icon: None,
+                brand_color: None,
             });
         }
         let start = prompt.find("PDF").unwrap();
@@ -349,6 +355,8 @@ mod tests {
             path: "/skills/pdf/SKILL.md".into(),
             label: "PDF".into(),
             kind: AgentInputReferenceKind::Skill,
+            icon: None,
+            brand_color: None,
         });
         references.sort_by_key(|r| r.range.start);
         let context = AgentPromptContext {
@@ -385,6 +393,8 @@ mod tests {
                 path: "/s".into(),
                 label: "你".into(),
                 kind: AgentInputReferenceKind::Skill,
+                icon: None,
+                brand_color: None,
             }],
             ..Default::default()
         };
@@ -419,6 +429,8 @@ mod context_reference_tests {
                     label: "Documents".into(),
                     path: "plugin://documents@openai-primary-runtime".into(),
                     kind: AgentInputReferenceKind::Plugin,
+                    icon: None,
+                    brand_color: None,
                 },
                 AgentInputReference {
                     range: 14..27,
@@ -426,6 +438,8 @@ mod context_reference_tests {
                     label: "previous chat".into(),
                     path: "thread://local-chat?hostId=local".into(),
                     kind: AgentInputReferenceKind::Thread,
+                    icon: None,
+                    brand_color: None,
                 },
             ],
             ..Default::default()

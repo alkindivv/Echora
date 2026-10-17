@@ -72,6 +72,7 @@ impl SettingsView {
                             .child(
                                 div()
                                     .id("plugins-browse-directory")
+                                    .debug_selector(|| "plugins-browse-directory".into())
                                     .cursor_pointer()
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.refresh_plugins(true, cx);

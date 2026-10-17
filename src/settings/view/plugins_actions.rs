@@ -68,6 +68,11 @@ impl SettingsView {
                         .directory
                         .apply_installed(cycle, installed);
                 }
+                if this.plugins_catalog.directory.cycle == cycle
+                    && let Some(id) = this.plugins_catalog.pending_reference.take()
+                {
+                    this.open_plugin_detail(id, cx);
+                }
                 cx.notify();
             });
         })
@@ -134,6 +139,23 @@ impl SettingsView {
         .detach();
     }
 
+    /// Opens a semantic composer reference after resolving its installed identity.
+    pub fn inspect_plugin_reference(&mut self, id: String, cx: &mut Context<Self>) {
+        self.plugins_segment = PluginSegment::Plugins;
+        self.select("plugins-settings", cx);
+        self.plugins_catalog
+            .directory
+            .set_search_term(String::new());
+        if self.plugins_catalog.directory.loading
+            || self.plugins_catalog.directory.catalog.is_none()
+        {
+            self.plugins_catalog.pending_reference = Some(id);
+            self.ensure_plugins_segment_loaded(cx);
+        } else {
+            self.open_plugin_detail(id, cx);
+        }
+    }
+
     /// Loads one plugin's detail through `plugin/read`.
     pub(super) fn open_plugin_detail(&mut self, plugin_id: String, cx: &mut Context<Self>) {
         let Some(row) = self
@@ -149,10 +171,21 @@ impl SettingsView {
                 )
             })
         else {
+            self.plugins_catalog.open_plugin = None;
+            self.plugins_catalog.directory.clear_detail();
+            self.plugins_catalog.directory.detail_error = Some(crate::agent::AgentPluginsError {
+                kind: crate::agent::AgentPluginsErrorKind::Protocol,
+                message: crate::i18n::format!("此插件已不在当前目录中"=>"This plugin is no longer in the current catalog"),
+                data: None,
+                outcome_unknown: false,
+            });
+            cx.notify();
             return;
         };
         let (plugin_name, marketplace_path) = row;
-        self.plugins_catalog.open_plugin = Some(plugin_id);
+        self.plugins_catalog.directory.clear_detail();
+        self.plugins_catalog.open_plugin = Some(plugin_id.clone());
+        let cycle = self.plugins_catalog.directory.cycle;
         let reader = self.backend.read_plugin(AgentPluginReadRequest {
             marketplace_path,
             remote_marketplace_name: None,
@@ -161,6 +194,11 @@ impl SettingsView {
         cx.spawn(async move |this, cx| {
             let result = reader.recv().await;
             let _ = this.update(cx, |this, cx| {
+                if this.plugins_catalog.directory.cycle != cycle
+                    || this.plugins_catalog.open_plugin.as_deref() != Some(plugin_id.as_str())
+                {
+                    return;
+                }
                 match result {
                     Ok(Ok(detail)) => {
                         this.plugins_catalog.directory.detail = Some(detail);
