@@ -72,7 +72,14 @@ The exact protocol coverage and compatibility rules live in [the app-server inte
 
 ## Get started
 
-The current development and verification platform is **macOS**. Install the Rust toolchain pinned in [rust-toolchain.toml](rust-toolchain.toml), the macOS build tools, and a logged-in Codex CLI available on `PATH`. The current integration baseline is `codex-cli 0.158.0`; see the integration table before changing CLI versions.
+The current development and verification platform is **macOS**. Install the Rust toolchain pinned in [rust-toolchain.toml](rust-toolchain.toml), Xcode with its Metal Toolchain component, and a logged-in Codex CLI available on `PATH`. The current integration baseline is `codex-cli 0.158.0`; see the integration table before changing CLI versions.
+
+GPUI compiles Metal shaders during the build. With Xcode selected as the active developer directory (`xcode-select -p`), install and verify the Metal compiler before the first build; recent Xcode versions distribute it separately. If `cargo run` reports `cannot execute tool 'metal' due to missing Metal Toolchain`, run:
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+xcrun --sdk macosx metal --version
+```
 
 ```bash
 git clone https://github.com/rita152/Echora.git

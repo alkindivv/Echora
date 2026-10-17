@@ -72,7 +72,14 @@
 
 ## 快速开始
 
-当前开发与验收平台为 **macOS**。需要 [rust-toolchain.toml](rust-toolchain.toml) 固定的 Rust 工具链、macOS 构建工具，以及已安装、已登录且位于 `PATH` 的 Codex CLI。当前接入基线为 `codex-cli 0.158.0`，更换 CLI 版本前请核对接入总表。
+当前开发与验收平台为 **macOS**。需要 [rust-toolchain.toml](rust-toolchain.toml) 固定的 Rust 工具链、包含 Metal Toolchain 组件的 Xcode，以及已安装、已登录且位于 `PATH` 的 Codex CLI。当前接入基线为 `codex-cli 0.158.0`，更换 CLI 版本前请核对接入总表。
+
+GPUI 会在构建时编译 Metal 着色器。确认当前开发工具目录已选中 Xcode（`xcode-select -p`）后，在首次构建前安装并验证 Metal 编译器；较新的 Xcode 将其作为独立组件分发。若 `cargo run` 报错 `cannot execute tool 'metal' due to missing Metal Toolchain`，执行：
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+xcrun --sdk macosx metal --version
+```
 
 ```bash
 git clone https://github.com/rita152/Echora.git
