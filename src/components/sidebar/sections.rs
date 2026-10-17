@@ -264,7 +264,7 @@ impl SidebarView {
                 };
                 this.project_menu_id = None;
                 this.thread_menu_id = None;
-                this.projects_section_menu_open = false;
+                this.recents_menu.open = false;
                 this.menu_origin = (f32::from(event.position.x), f32::from(event.position.y));
                 cx.notify();
             }),
@@ -550,32 +550,6 @@ impl SidebarView {
         rows
     }
 
-    /// The Projects heading menu's last row, after a separator.
-    pub(super) fn new_section_menu_rows(
-        &self,
-        theme: Theme,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        if !self.custom_sections_enabled() {
-            return Vec::new();
-        }
-        vec![
-            Self::menu_separator(theme).into_any_element(),
-            Self::menu_item(
-                "projects-new-section",
-                crate::i18n::format!("新建分区" => "New section"),
-                "add",
-                theme,
-                true,
-            )
-            .debug_selector(|| "PROJECTS_MENU_NEW_SECTION".to_owned())
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.open_section_dialog(None, None, String::new(), cx);
-            }))
-            .into_any_element(),
-        ]
-    }
-
     /// A drop on Projects or Recents takes a chat or project out of its
     /// custom section.
     pub(super) fn section_exit_drop<E: InteractiveElement + FluentBuilder>(
@@ -630,7 +604,7 @@ impl SidebarView {
         self.thread_menu_id = None;
         self.project_menu_id = None;
         self.section_menu_id = None;
-        self.projects_section_menu_open = false;
+        self.recents_menu.open = false;
     }
 
     /// Opens the New section / Edit section dialog with its field focused.

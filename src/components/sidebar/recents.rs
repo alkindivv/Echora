@@ -1,4 +1,4 @@
-//! Recents controls and the nested sidebar layout/sorting menus.
+//! Shared Projects/Recents layout and chat sorting menus.
 use super::{
     AccountMenuRhythm, SidebarView, Theme, account_menu_ring, account_menu_row,
     account_menu_separator, account_menu_surface, icon,
@@ -12,6 +12,9 @@ const ITEM: f32 = 28.5625;
 #[derive(Default)]
 pub(super) struct RecentsMenu {
     pub open: bool,
+    pub from_projects: bool,
+    pub project_anchor: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
+    pub project_focus: Option<FocusHandle>,
     pub submenu: Option<usize>,
     pub selected: Option<usize>,
     pub sub_selected: Option<usize>,
@@ -58,10 +61,17 @@ impl SidebarView {
             )
     }
 
-    fn recents_open(&mut self, keyboard: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let open = !self.recents_menu.open;
+    fn recents_open(
+        &mut self,
+        keyboard: bool,
+        from_projects: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let open = !self.recents_menu.open || self.recents_menu.from_projects != from_projects;
         self.close_transient_menus(cx);
         self.recents_menu.open = open;
+        self.recents_menu.from_projects = from_projects;
         self.recents_menu.selected = keyboard.then_some(0);
         if open {
             self.hovered_thread_id = None;
@@ -69,9 +79,56 @@ impl SidebarView {
             self.stop_marquee();
             self.project_hover_card = None;
             self.thread_hover_card = None;
-            self.recents_menu.focus.as_ref().unwrap().focus(window, cx);
+            self.options_focus().focus(window, cx);
         }
         cx.notify();
+    }
+
+    fn options_focus(&self) -> &FocusHandle {
+        if self.recents_menu.from_projects {
+            self.recents_menu.project_focus.as_ref().unwrap()
+        } else {
+            self.recents_menu.focus.as_ref().unwrap()
+        }
+    }
+
+    pub(super) fn projects_options_button(
+        &self,
+        visible: bool,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let open = self.recents_menu.open && self.recents_menu.from_projects;
+        let anchor = self.recents_menu.project_anchor.clone();
+        Self::activity_transparent_button("projects-options", "more-horizontal", open, theme)
+            .role(gpui::Role::Button)
+            .aria_label(crate::i18n::text("项目侧边栏选项"))
+            .aria_expanded(open)
+            .track_focus(self.recents_menu.project_focus.as_ref().unwrap())
+            .tab_stop(true)
+            .when(!visible, |e| e.opacity(0.0))
+            .focus_visible(|s| s.opacity(1.0))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                this.recents_open(false, true, window, cx);
+            }))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if !this.recents_menu.open
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space" | "down")
+                {
+                    this.recents_open(true, true, window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(
+                canvas(
+                    move |bounds, _, _| anchor.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
     }
 
     pub(super) fn recent_heading(
@@ -79,31 +136,32 @@ impl SidebarView {
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<Div> {
-        let visible = self.hovered_section_id == Some("recent-heading") || self.recents_menu.open;
+        let visible = self.hovered_section_id == Some("recent-heading")
+            || (self.recents_menu.open && !self.recents_menu.from_projects);
         let anchor = self.recents_menu.anchor.clone();
         let options = Self::activity_transparent_button(
             "recents-options",
             "more-horizontal",
-            self.recents_menu.open,
+            self.recents_menu.open && !self.recents_menu.from_projects,
             theme,
         )
         .role(gpui::Role::Button)
         .aria_label(crate::i18n::text("聊天侧边栏选项"))
-        .aria_expanded(self.recents_menu.open)
+        .aria_expanded(self.recents_menu.open && !self.recents_menu.from_projects)
         .track_focus(self.recents_menu.focus.as_ref().unwrap())
         .tab_stop(true)
         .focus_visible(|s| s.opacity(1.0))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(cx.listener(|this, _, window, cx| {
             cx.stop_propagation();
-            this.recents_open(false, window, cx)
+            this.recents_open(false, false, window, cx)
         }))
         .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
             if this.recents_menu.open {
                 return;
             }
             if matches!(event.keystroke.key.as_str(), "enter" | "space" | "down") {
-                this.recents_open(true, window, cx);
+                this.recents_open(true, false, window, cx);
                 cx.stop_propagation();
             }
         }))
@@ -171,7 +229,9 @@ impl SidebarView {
                         .collect();
                 }
             }
-            None if index == 2 && !next.combined => next.projects_hidden = !next.projects_hidden,
+            None if index == 2 && !next.combined && !self.recents_menu.from_projects => {
+                next.projects_hidden = !next.projects_hidden
+            }
             _ => return,
         }
         self.store.set_sidebar_preferences(next);
@@ -194,7 +254,14 @@ impl SidebarView {
     fn close_recents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.recents_menu.open = false;
         self.recents_menu.submenu = None;
-        self.recents_menu.focus.as_ref().unwrap().focus(window, cx);
+        if self.recents_menu.from_projects
+            && (self.snapshot.preferences.sidebar.combined
+                || self.store.snapshot().preferences.sidebar.combined)
+        {
+            self.recents_menu.focus.as_ref().unwrap().focus(window, cx);
+        } else {
+            self.options_focus().focus(window, cx);
+        }
         cx.notify();
     }
 
@@ -207,12 +274,14 @@ impl SidebarView {
         if !self.recents_menu.open {
             return;
         }
-        let count =
-            if self.recents_menu.submenu.is_some() || self.snapshot.preferences.sidebar.combined {
-                2
-            } else {
-                3
-            };
+        let count = if self.recents_menu.submenu.is_some()
+            || self.snapshot.preferences.sidebar.combined
+            || self.recents_menu.from_projects
+        {
+            2
+        } else {
+            3
+        };
         let top_selected = self.recents_menu.selected.unwrap_or(0);
         let selected = if self.recents_menu.submenu.is_some() {
             &mut self.recents_menu.sub_selected
@@ -312,9 +381,14 @@ impl SidebarView {
         if !self.recents_menu.open {
             return None;
         }
-        let anchor = self.recents_menu.anchor.get()?;
+        let anchor = if self.recents_menu.from_projects {
+            self.recents_menu.project_anchor.get()?
+        } else {
+            self.recents_menu.anchor.get()?
+        };
         let prefs = &self.snapshot.preferences.sidebar;
-        let height = if prefs.combined {
+        let show_projects = !prefs.combined && !self.recents_menu.from_projects;
+        let height = if !show_projects {
             8.0 + 2.0 * ITEM
         } else {
             8.0 + 3.0 * ITEM + 9.0 + 26.0
@@ -327,7 +401,11 @@ impl SidebarView {
             .max(8.0);
         let mut menu = self
             .recents_surface("recents-menu", 220.0, theme, window.scale_factor())
-            .aria_label(crate::i18n::text("聊天侧边栏选项"));
+            .aria_label(crate::i18n::text(if self.recents_menu.from_projects {
+                "项目侧边栏选项"
+            } else {
+                "聊天侧边栏选项"
+            }));
         let mut rhythm = AccountMenuRhythm::new(window.scale_factor());
         for (index, (id, label, glyph)) in [
             (
@@ -383,7 +461,7 @@ impl SidebarView {
                 })),
             );
         }
-        if !prefs.combined {
+        if show_projects {
             menu = menu
                 .child(account_menu_separator(rhythm.span(9.0), theme))
                 .child(

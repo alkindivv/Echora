@@ -126,6 +126,37 @@ if option("scenario") == "capture" {
     print("Verified app-owned capture without Screen Recording or Apple Events")
     exit(0)
 }
+if option("scenario") == "projects" {
+    func openOptions(_ label: String, edge: Int = 0) {
+        key(53)
+        for _ in 0..<4 {
+            click(find(label), edge: edge)
+            if elements().contains(where: {title($0)=="Organize sidebar"}) {return}
+            Thread.sleep(forTimeInterval:0.3)
+        }
+        fatalError("Sidebar menu did not open: \(label)")
+    }
+    let projects = "Project sidebar options"
+    for edge in [-1, 0, 1] {
+        openOptions(projects, edge: edge); key(53)
+    }
+    openOptions(projects); record("01-menu")
+    precondition(!elements().contains(where: {title($0)=="Show"}), "Projects menu included Recents-only visibility options")
+    click(find("Organize sidebar")); record("02-organize")
+    click(find("In one list")); record("03-combined")
+    precondition(!elements().contains(where: {title($0)==projects}), "Combined layout did not remove Projects")
+    openOptions("Chat sidebar options"); click(find("Organize sidebar")); click(find("By project"))
+    openOptions(projects); click(find("Sort chats by")); record("04-sort")
+    click(find("Manual order")); record("05-manual")
+    openOptions("Chat sidebar options"); click(find("Sort chats by")); record("06-shared-sort")
+    click(find("Last updated"))
+    openOptions(projects); key(125); key(124); key(123); key(53); record("07-keyboard-dismiss")
+    precondition(!elements().contains(where: {title($0)=="Organize sidebar"}))
+    openOptions(projects); click(find("Chat input")); record("08-outside-dismiss")
+    precondition(!elements().contains(where: {title($0)=="Organize sidebar"}))
+    print("Verified Projects menu hit areas, organization, shared sorting, keyboard navigation, and outside dismissal")
+    exit(0)
+}
 if option("scenario") == "recents" {
     app.activate(options: [.activateAllWindows]); Thread.sleep(forTimeInterval: 0.5)
     func menuItem(_ label: String) -> AXUIElement {
@@ -147,7 +178,7 @@ if option("scenario") == "recents" {
     }
     openRecents(); record("01-menu")
     click(find("Organize sidebar")); record("02-organize")
-    click(find("Combined")); record("03-combined")
+    click(find("In one list")); record("03-combined")
     openRecents(); click(find("Sort chats by")); record("04-sort")
     click(find("Manual order")); record("05-manual")
     openRecents(); key(125); key(124); key(123); key(53); record("06-keyboard-dismiss")

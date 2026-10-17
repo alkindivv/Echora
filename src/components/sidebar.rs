@@ -895,7 +895,6 @@ pub struct SidebarView {
     thread_menu_id: Option<ThreadId>,
     menu_origin: (f32, f32),
     delete_confirmation: Option<DeleteTarget>,
-    projects_section_menu_open: bool,
     recents_menu: recents::RecentsMenu,
     recent_visible_count: usize,
     recent_loader_requested: Rc<Cell<usize>>,
@@ -1061,11 +1060,11 @@ impl SidebarView {
             thread_menu_id: None,
             menu_origin: (0.0, 0.0),
             delete_confirmation: None,
-            projects_section_menu_open: false,
             recent_visible_count: 20,
             recent_loader_requested: Rc::new(Cell::new(0)),
             recents_menu: recents::RecentsMenu {
                 focus: Some(cx.focus_handle()),
+                project_focus: Some(cx.focus_handle()),
                 ..Default::default()
             },
             pinned_menu_open: false,
@@ -1155,7 +1154,8 @@ impl SidebarView {
     }
 
     pub fn open_projects_section_menu_for_capture(&mut self, cx: &mut Context<Self>) {
-        self.projects_section_menu_open = true;
+        self.recents_menu.open = true;
+        self.recents_menu.from_projects = true;
         cx.notify();
     }
 
@@ -1163,7 +1163,6 @@ impl SidebarView {
         self.project_menu_id = None;
         self.thread_menu_id = None;
         self.section_menu_id = None;
-        self.projects_section_menu_open = false;
         self.recents_menu.open = false;
         self.recents_menu.submenu = None;
         self.recents_menu.sub_selected = None;
@@ -1174,9 +1173,8 @@ impl SidebarView {
         cx.notify();
     }
 
-    #[cfg(test)]
     pub fn projects_section_menu_is_open(&self) -> bool {
-        self.projects_section_menu_open
+        self.recents_menu.open && self.recents_menu.from_projects
     }
 
     #[cfg(test)]
@@ -3226,22 +3224,15 @@ impl SidebarView {
     ) -> gpui::Stateful<Div> {
         let collapsed = self.snapshot.preferences.projects_collapsed;
         let heading_hovered = self.hovered_section_id == Some("projects-heading");
-        let show_heading_actions = heading_hovered || self.projects_section_menu_open;
+        let show_heading_actions = heading_hovered || self.projects_section_menu_is_open();
         let can_create = self
             .snapshot
             .capabilities
             .supports(AgentCapability::ProjectCreate);
         let pinned_ids = self.sectioned_thread_ids();
         let sectioned_projects = self.sectioned_project_ids();
-        let menu_button = Self::quiet_icon_button("projects-options", "more-horizontal", theme)
-            .when(!show_heading_actions, |b| b.opacity(0.0))
-            .on_click(cx.listener(|this, _, _, cx| {
-                cx.stop_propagation();
-                this.projects_section_menu_open = !this.projects_section_menu_open;
-                this.project_menu_id = None;
-                cx.notify();
-            }));
-        let add_button = Self::quiet_icon_button("project-add", "add", theme)
+        let menu_button = self.projects_options_button(show_heading_actions, theme, cx);
+        let add_button = Self::activity_transparent_button("project-add", "add", false, theme)
             .when(!show_heading_actions, |b| b.opacity(0.0))
             .focus_visible(|s| s.opacity(1.0))
             .role(gpui::Role::Button)
@@ -3282,7 +3273,7 @@ impl SidebarView {
                 .id("projects-section-heading-row")
                 .h(px(SECTION_HEADER_HEIGHT))
                 .pl(px(8.0))
-                .pr(px(2.0))
+                .pr(px(6.0))
                 .flex()
                 .items_center()
                 .gap(px(8.0))
@@ -4090,46 +4081,6 @@ impl SidebarView {
         )
     }
 
-    fn projects_options_menu(&self, theme: Theme, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
-        let can_list_threads = self
-            .snapshot
-            .capabilities
-            .supports(AgentCapability::ThreadList);
-        self.menu_shell("projects-options-menu", 176.0, theme)
-            .child(
-                Self::menu_item(
-                    "projects-refresh",
-                    crate::i18n::text("刷新"),
-                    "settings-refresh",
-                    theme,
-                    true,
-                )
-                .on_click(cx.listener(|this, _, _, _| {
-                    this.store.refresh_all();
-                    this.projects_section_menu_open = false;
-                })),
-            )
-            .child(
-                Self::menu_item(
-                    "projects-archived",
-                    crate::i18n::text("已归档聊天"),
-                    "archive",
-                    theme,
-                    can_list_threads,
-                )
-                .when(can_list_threads, |row| {
-                    row.on_click(cx.listener(|this, _, _, cx| {
-                        this.archived_open = true;
-                        this.activity = None;
-                        this.activity_menu_open = false;
-                        this.projects_section_menu_open = false;
-                        cx.notify();
-                    }))
-                }),
-            )
-            .children(self.new_section_menu_rows(theme, cx))
-    }
-
     fn header(&self, theme: Theme, cx: &mut Context<Self>) -> Div {
         let can_search = self
             .snapshot
@@ -4644,15 +4595,6 @@ impl Render for SidebarView {
                     .left(px(left))
                     .top(px(top))
                     .child(self.section_options_menu(section, theme, cx)),
-            ));
-        }
-        if self.projects_section_menu_open {
-            sidebar = sidebar.child(deferred(
-                div()
-                    .absolute()
-                    .left(px(56.0))
-                    .top(px(220.0))
-                    .child(self.projects_options_menu(theme, cx)),
             ));
         }
         if self.profile_menu_open {
@@ -5839,6 +5781,84 @@ mod tests {
             let _ = std::fs::remove_dir_all(parent);
         }
     }
+    #[test]
+    fn projects_options_share_sidebar_choices_and_return_focus_after_hiding_projects() {
+        let path = std::env::temp_dir()
+            .join(format!("echora-project-options-{}", std::process::id()))
+            .join("preferences.json");
+        let store = WorkspaceStore::with_preferences_path(SidebarBackend::new(), path.clone());
+        let mut app = TestApp::new();
+        let mut window = app.open_window_with_options(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(0.), px(0.)),
+                    size(px(900.), px(700.)),
+                ))),
+                ..Default::default()
+            },
+            |_, cx| SidebarView::new(ThemeMode::Dark, false, store.clone(), cx),
+        );
+        window.draw();
+        let anchor = window.read(|s, _| s.recents_menu.project_anchor.get().unwrap());
+        for dx in [-11., 0., 11.] {
+            for dy in [-11., 0., 11.] {
+                let target = anchor.center() + point(px(dx), px(dy));
+                window.simulate_mouse_move(target);
+                window.draw();
+                window.simulate_click(target, MouseButton::Left);
+                window.draw();
+                assert!(window.read(|s, _| s.projects_section_menu_is_open()));
+                window.simulate_keystroke("escape");
+                window.draw();
+                assert!(!window.read(|s, _| s.recents_menu.open));
+                window.update(|s, window, _| {
+                    assert!(
+                        s.recents_menu
+                            .project_focus
+                            .as_ref()
+                            .unwrap()
+                            .is_focused(window)
+                    )
+                });
+            }
+        }
+        window.simulate_click(anchor.center(), MouseButton::Left);
+        window.draw();
+        for key in ["down", "right", "down", "enter"] {
+            window.simulate_keystroke(key);
+            window.draw();
+        }
+        assert!(store.snapshot().preferences.sidebar.combined);
+        window.update(|s, window, _| {
+            assert!(!s.recents_menu.open);
+            assert!(s.recents_menu.focus.as_ref().unwrap().is_focused(window));
+            s.snapshot = store.snapshot();
+        });
+        window.draw();
+        // The Projects trigger disappears, but Recents can reverse the choice.
+        window.simulate_keystroke("down");
+        window.draw();
+        for key in ["right", "enter"] {
+            window.simulate_keystroke(key);
+            window.draw();
+        }
+        assert!(!store.snapshot().preferences.sidebar.combined);
+        window.update(|s, _, _| s.snapshot = store.snapshot());
+        window.draw();
+        let anchor = window.read(|s, _| s.recents_menu.project_anchor.get().unwrap());
+        window.simulate_mouse_move(anchor.center());
+        window.draw();
+        window.simulate_click(anchor.center(), MouseButton::Left);
+        window.draw();
+        for key in ["down", "down", "right", "down", "enter"] {
+            window.simulate_keystroke(key);
+            window.draw();
+        }
+        assert!(store.snapshot().preferences.sidebar.manual_sort);
+        assert!(!window.read(|s, _| s.recents_menu.open));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     #[test]
     fn recents_buttons_use_full_hit_areas_and_start_a_projectless_draft() {
         let path = std::env::temp_dir()
