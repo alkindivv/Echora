@@ -152,6 +152,7 @@ pub(super) fn english(source: &str) -> Option<&'static str> {
         }
         "侧边聊天输入框" => "Side chat input",
         "保存" => "Save",
+        "正在保存…" => "Saving…",
         "保持简短且易于识别" => "Keep it short and recognizable",
         "保存中…" => "Saving…",
         "保存后会回读有效配置。配置默认值与当前线程权限分别管理；线程权限变更从下一轮起生效，复核者会同步到进行中的轮次。" => {
@@ -969,6 +970,9 @@ pub(super) fn english(source: &str) -> Option<&'static str> {
         "编码" => "Coding",
         "编辑" => "Edit",
         "编辑项目" => "Edit project",
+        "固定" => "Pin",
+        "取消固定" => "Unpin",
+        "归档项目聊天" => "Archive chats",
         "编辑 " => "edit ",
         "编辑了多个文件" => "Edited multiple files",
         "编辑了文件" => "Edited files",

@@ -33,7 +33,9 @@ use crate::{
 };
 
 mod activity;
+mod project_actions;
 mod recents;
+pub use project_actions::ProjectAction;
 mod sections;
 #[cfg(test)]
 mod sections_tests;
@@ -621,9 +623,9 @@ pub(crate) fn hover_card_font(weight: gpui::FontWeight) -> gpui::Font {
 /// attention bucket that has tasks, separated by middle dots.
 fn project_hover_summary(threads: &[&ThreadSummary]) -> String {
     let mut parts = vec![if threads.len() == 1 {
-        crate::i18n::format!("{count} 个任务" => "{count}\u{a0}task", count = threads.len())
+        crate::i18n::format!("{count} 个聊天" => "{count}\u{a0}chat", count = threads.len())
     } else {
-        crate::i18n::format!("{count} 个任务" => "{count}\u{a0}tasks", count = threads.len())
+        crate::i18n::format!("{count} 个聊天" => "{count}\u{a0}chats", count = threads.len())
     }];
     let waiting = threads
         .iter()
@@ -832,7 +834,6 @@ pub struct ThreadRenamePanel {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum DeleteTarget {
-    Project(ProjectId),
     Thread(ThreadId),
 }
 
@@ -892,6 +893,9 @@ pub struct SidebarView {
     /// Capture request that arrived before the workspace listed the task.
     pending_thread_rename: Option<String>,
     project_menu_id: Option<ProjectId>,
+    project_menu_selected: Option<usize>,
+    project_action_focus: HashMap<ProjectId, gpui::FocusHandle>,
+    project_action_bounds: Rc<RefCell<HashMap<ProjectId, Bounds<Pixels>>>>,
     thread_menu_id: Option<ThreadId>,
     menu_origin: (f32, f32),
     delete_confirmation: Option<DeleteTarget>,
@@ -1057,6 +1061,9 @@ impl SidebarView {
             thread_rename_focus_pending: false,
             pending_thread_rename: None,
             project_menu_id: None,
+            project_menu_selected: None,
+            project_action_focus: HashMap::new(),
+            project_action_bounds: Rc::new(RefCell::new(HashMap::new())),
             thread_menu_id: None,
             menu_origin: (0.0, 0.0),
             delete_confirmation: None,
@@ -1390,7 +1397,9 @@ impl SidebarView {
                 .timer(PROJECT_HOVER_CARD_DELAY)
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.hovered_project_id.as_deref() != Some(project_id.as_str()) {
+                if this.project_menu_id.is_some()
+                    || this.hovered_project_id.as_deref() != Some(project_id.as_str())
+                {
                     return;
                 }
                 this.project_hover_card = Some(project_id.clone());
@@ -1661,7 +1670,6 @@ impl SidebarView {
     fn confirm_or_delete(&mut self, target: DeleteTarget, cx: &mut Context<Self>) {
         if self.delete_confirmation.as_ref() == Some(&target) {
             match target {
-                DeleteTarget::Project(project_id) => self.store.delete_project(project_id),
                 DeleteTarget::Thread(thread_id) => self.store.delete_thread(thread_id),
             }
             self.delete_confirmation = None;
@@ -2439,32 +2447,16 @@ impl SidebarView {
         let toggle_id = project_id.clone();
         let hover_id = project_id.clone();
         let bounds_id = project_id.clone();
-        let menu_id = project_id.clone();
+        let reorder_id = project_id.clone();
         let new_chat_project = project.clone();
         let row_bounds = self.project_row_bounds.clone();
         let actions = div()
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(8.0))
+            .mr(px(8.0))
             .child(
-                Self::quiet_icon_button(
-                    format!("project-menu-{project_id}"),
-                    "more-horizontal",
-                    theme,
-                )
-                .when(!hovered && !menu_open, |b| b.opacity(0.0))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        this.project_menu_id = Some(menu_id.clone());
-                        this.thread_menu_id = None;
-                        this.delete_confirmation = None;
-                        this.menu_origin =
-                            (f32::from(event.position.x), f32::from(event.position.y));
-                        cx.notify();
-                    }),
-                ),
+                self.project_actions_button(project, hovered || menu_open, theme, cx),
             )
             .child(
                 Self::quiet_icon_button(
@@ -2472,6 +2464,7 @@ impl SidebarView {
                     "new-chat",
                     theme,
                 )
+                .size(px(20.))
                 .when(!hovered && !menu_open, |b| b.opacity(0.0))
                 .focus_visible(|s| s.opacity(1.0))
                 .role(gpui::Role::Button)
@@ -2510,6 +2503,36 @@ impl SidebarView {
                 .when_some(drag, |row, drag| {
                     row.on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
                 })
+                .when(
+                    self.snapshot
+                        .capabilities
+                        .supports(AgentCapability::ProjectMove)
+                        && !self
+                            .snapshot
+                            .preferences
+                            .pinned_project_ids
+                            .contains(&project_id),
+                    |row| {
+                        row.drag_over::<sections::SidebarItemDrag>(move |s, _, _, _| {
+                            s.border_t_1().border_color(theme.sidebar_text_muted)
+                        })
+                        .on_drop(cx.listener(
+                            move |this, drag: &sections::SidebarItemDrag, _, cx| {
+                                if let crate::workspace::SectionItem::Project(id) = &drag.item {
+                                    if id != &reorder_id {
+                                        this.store.move_to_custom_section(
+                                            crate::workspace::SectionItem::Project(id.clone()),
+                                            None,
+                                        );
+                                        this.store
+                                            .move_project(id.clone(), Some(reorder_id.clone()));
+                                    }
+                                    cx.stop_propagation();
+                                }
+                            },
+                        ))
+                    },
+                )
                 .h(px(ROW_HEIGHT))
                 .w_full()
                 .relative()
@@ -2676,6 +2699,14 @@ impl SidebarView {
         let rename_id = project_id.clone();
         let rename_name = project.name.clone();
         let edit_options_id = project_id.clone();
+        let pin_id = project_id.clone();
+        let key_pin_id = project_id.clone();
+        let key_edit_id = project_id.clone();
+        let pinned = self
+            .snapshot
+            .preferences
+            .pinned_project_ids
+            .contains(&project_id);
         let path_group = format!("project-hover-path-{project_id}");
 
         let header = div()
@@ -2715,15 +2746,49 @@ impl SidebarView {
                     )
                     .child(div().flex_1())
                     .child(
-                        // The reference always shows the pin action here; this
-                        // build has no project pinning, so the icon stays inert.
                         div()
+                            .id(format!("project-hover-pin-{project_id}"))
+                            .role(gpui::Role::Button)
+                            .aria_label(crate::i18n::text(if pinned {
+                                "取消固定"
+                            } else {
+                                "固定"
+                            }))
+                            .focusable()
+                            .tab_stop(true)
+                            .cursor_pointer()
                             .flex_none()
-                            .size(px(24.0))
+                            .size(px(24.))
+                            .rounded(px(8.))
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(icon("project-pin", theme.text_tertiary.into()).size(px(16.0))),
+                            .hover(move |s| s.bg(theme.sidebar_hover))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.store.set_project_pinned(pin_id.clone(), !pinned);
+                                this.project_hover_card = None;
+                                if let Some(focus) = this.project_action_focus.get(&pin_id) {
+                                    focus.focus(window, cx);
+                                }
+                                cx.notify();
+                            }))
+                            .on_key_down(cx.listener(
+                                move |this, e: &gpui::KeyDownEvent, window, cx| {
+                                    if matches!(e.keystroke.key.as_str(), "enter" | "space") {
+                                        this.store.set_project_pinned(key_pin_id.clone(), !pinned);
+                                        this.project_hover_card = None;
+                                        cx.notify();
+                                        if let Some(focus) =
+                                            this.project_action_focus.get(&key_pin_id)
+                                        {
+                                            focus.focus(window, cx);
+                                        }
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
+                            .child(icon("project-pin", theme.text_tertiary.into()).size(px(16.))),
                     ),
             );
 
@@ -2836,6 +2901,17 @@ impl SidebarView {
                 .child(
                     div()
                         .id(format!("project-hover-edit-{project_id}"))
+                        .role(gpui::Role::Button)
+                        .aria_label(crate::i18n::text("编辑项目"))
+                        .focusable()
+                        .tab_stop(true)
+                        .on_key_down(cx.listener(move |this, e: &gpui::KeyDownEvent, _, cx| {
+                            if matches!(e.keystroke.key.as_str(), "enter" | "space") {
+                                this.project_hover_card = None;
+                                cx.emit(ProjectAction::Edit(key_edit_id.clone()));
+                                cx.stop_propagation();
+                            }
+                        }))
                         .h(px(PROJECT_HOVER_ROW_HEIGHT))
                         .w_full()
                         .min_w(px(0.0))
@@ -2852,10 +2928,8 @@ impl SidebarView {
                         ))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
-                            this.project_menu_id = Some(edit_options_id.clone());
-                            this.thread_menu_id = None;
-                            this.delete_confirmation = None;
-                            this.menu_origin = (160.0, 160.0);
+                            this.project_hover_card = None;
+                            cx.emit(ProjectAction::Edit(edit_options_id.clone()));
                             cx.notify();
                         })),
                 ),
@@ -3200,6 +3274,12 @@ impl SidebarView {
             .flex()
             .flex_col()
             .gap(px(ROW_GAP));
+        let sectioned = self.sectioned_thread_ids();
+        for id in &self.snapshot.preferences.pinned_project_ids {
+            if let Some(project) = self.snapshot.projects.iter().find(|p| &p.project_id == id) {
+                list = list.child(self.project_group(project, &sectioned, theme, window, cx));
+            }
+        }
         for thread in &self.snapshot.pinned_threads {
             list = list.child(self.thread_row(
                 thread,
@@ -3692,9 +3772,11 @@ impl SidebarView {
                 // The reference's order: Pinned, the custom sections, then
                 // Projects and Recents.
                 content
-                    .when(!self.snapshot.pinned_threads.is_empty(), |content| {
-                        content.child(self.pinned_section(theme, window, cx))
-                    })
+                    .when(
+                        !self.snapshot.pinned_threads.is_empty()
+                            || !self.snapshot.preferences.pinned_project_ids.is_empty(),
+                        |content| content.child(self.pinned_section(theme, window, cx)),
+                    )
                     .children(self.custom_section_elements(theme, window, cx))
                     .when(
                         !self.snapshot.preferences.sidebar.combined
@@ -3769,141 +3851,6 @@ impl SidebarView {
             .flex()
             .items_center()
             .child(div().h(px(0.5)).w_full().bg(theme.border))
-    }
-
-    fn project_context_menu(
-        &self,
-        project: &Project,
-        theme: Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<Div> {
-        let project_id = project.project_id.clone();
-        let project_name = project.name.clone();
-        let project_root = project.roots.first().cloned();
-        let index = self
-            .snapshot
-            .projects
-            .iter()
-            .position(|candidate| candidate.project_id == project_id)
-            .unwrap_or(0);
-        let move_up_before = index
-            .checked_sub(1)
-            .and_then(|before| self.snapshot.projects.get(before))
-            .map(|project| project.project_id.clone());
-        let move_down_before = self
-            .snapshot
-            .projects
-            .get(index + 2)
-            .map(|project| project.project_id.clone());
-        let can_move_up = index > 0;
-        let can_move_down = index + 1 < self.snapshot.projects.len();
-        let can_update = self
-            .snapshot
-            .capabilities
-            .supports(AgentCapability::ProjectUpdate);
-        let can_move = self
-            .snapshot
-            .capabilities
-            .supports(AgentCapability::ProjectMove);
-        let can_delete = self
-            .snapshot
-            .capabilities
-            .supports(AgentCapability::ProjectDelete);
-        let rename_id = project_id.clone();
-        let up_id = project_id.clone();
-        let down_id = project_id.clone();
-        let delete_id = project_id.clone();
-        let deleting =
-            self.delete_confirmation.as_ref() == Some(&DeleteTarget::Project(project_id.clone()));
-        let mut menu = self
-            .menu_shell(format!("project-context-{project_id}"), 190.0, theme)
-            .child(
-                Self::menu_item(
-                    format!("project-rename-{project_id}"),
-                    crate::i18n::text("重命名"),
-                    "settings-edit",
-                    theme,
-                    can_update,
-                )
-                .when(can_update, |row| {
-                    row.on_click(cx.listener(move |this, _, _, cx| {
-                        this.start_rename(rename_id.clone(), project_name.clone(), cx);
-                    }))
-                }),
-            );
-        if let Some(root) = project_root {
-            menu = menu.child(
-                Self::menu_item(
-                    format!("project-finder-{project_id}"),
-                    crate::i18n::text("在 Finder 中显示"),
-                    "project-reveal",
-                    theme,
-                    true,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.reveal_in_finder(root.clone(), cx);
-                })),
-            );
-        }
-        menu = menu
-            .child(Self::menu_separator(theme))
-            .child(
-                Self::menu_item(
-                    format!("project-up-{project_id}"),
-                    crate::i18n::text("上移"),
-                    "settings-chevron-up",
-                    theme,
-                    can_move && can_move_up,
-                )
-                .when(can_move && can_move_up, |row| {
-                    row.on_click(cx.listener(move |this, _, _, _| {
-                        this.store
-                            .move_project(up_id.clone(), move_up_before.clone());
-                        this.project_menu_id = None;
-                    }))
-                }),
-            )
-            .child(
-                Self::menu_item(
-                    format!("project-down-{project_id}"),
-                    crate::i18n::text("下移"),
-                    "chevron-down",
-                    theme,
-                    can_move && can_move_down,
-                )
-                .when(can_move && can_move_down, |row| {
-                    row.on_click(cx.listener(move |this, _, _, _| {
-                        this.store
-                            .move_project(down_id.clone(), move_down_before.clone());
-                        this.project_menu_id = None;
-                    }))
-                }),
-            )
-            .children(self.section_menu_rows(
-                crate::workspace::SectionItem::Project(project_id.clone()),
-                theme,
-                cx,
-            ))
-            .child(Self::menu_separator(theme))
-            .child(
-                Self::menu_item(
-                    format!("project-delete-{project_id}"),
-                    if deleting {
-                        crate::i18n::text("再次点击以移除")
-                    } else {
-                        crate::i18n::text("移除项目")
-                    },
-                    "close-dialog",
-                    theme,
-                    can_delete,
-                )
-                .when(can_delete, |row| {
-                    row.on_click(cx.listener(move |this, _, _, cx| {
-                        this.confirm_or_delete(DeleteTarget::Project(delete_id.clone()), cx);
-                    }))
-                }),
-            );
-        menu
     }
 
     fn thread_context_menu(
@@ -4510,6 +4457,11 @@ impl Render for SidebarView {
         if std::mem::take(&mut self.section_dialog_focus_pending) {
             self.section_name_input.focus_handle(cx).focus(window, cx);
         }
+        for project in &self.snapshot.projects {
+            self.project_action_focus
+                .entry(project.project_id.clone())
+                .or_insert_with(|| cx.focus_handle());
+        }
         let theme = Theme::for_mode(self.mode);
         let mut sidebar = div()
             .id("sidebar")
@@ -4526,7 +4478,8 @@ impl Render for SidebarView {
             // this content view would compound its alpha and make the settled
             // sidebar appear opaque in both light and dark themes.
             .text_color(theme.sidebar_text)
-            .on_key_down(cx.listener(Self::recents_key));
+            .on_key_down(cx.listener(Self::recents_key))
+            .on_key_down(cx.listener(Self::project_actions_key));
         if self.archived_open {
             sidebar = sidebar
                 .child(self.subpage_header(crate::i18n::text("已归档"), theme, cx))
@@ -4538,22 +4491,8 @@ impl Render for SidebarView {
                 .child(self.footer(theme, 1.0 / window.scale_factor(), cx));
         }
 
-        if let Some(project_id) = self.project_menu_id.as_deref()
-            && let Some(project) = self
-                .snapshot
-                .projects
-                .iter()
-                .find(|project| project.project_id == project_id)
-        {
-            let left = self.menu_origin.0.clamp(8.0, self.width - 198.0);
-            let top = self.menu_origin.1.max(42.0);
-            sidebar = sidebar.child(deferred(
-                div()
-                    .absolute()
-                    .left(px(left))
-                    .top(px(top))
-                    .child(self.project_context_menu(project, theme, cx)),
-            ));
+        if let Some(menu) = self.project_actions_overlay(theme, window, cx) {
+            sidebar = sidebar.child(menu);
         }
         if let Some(thread_id) = self.thread_menu_id.as_deref()
             && let Some(thread) = self.snapshot.thread(thread_id)
@@ -4635,10 +4574,9 @@ impl Render for SidebarView {
             let left = f32::from(bounds.origin.x + bounds.size.width) + PROJECT_HOVER_CARD_OFFSET_X;
             let top = f32::from(bounds.origin.y) + PROJECT_HOVER_CARD_OFFSET_Y;
             sidebar = sidebar.child(deferred(
-                div()
-                    .absolute()
-                    .left(px(left))
-                    .top(px(top))
+                gpui::anchored()
+                    .position(gpui::point(px(left), px(top)))
+                    .snap_to_window_with_margin(px(8.))
                     .child(self.project_hover_card(project, theme, cx)),
             ));
         }
@@ -5212,9 +5150,9 @@ mod tests {
                 .get("project-stable-id")
                 .unwrap()
         });
-        for dx in [-11., 0., 11.] {
-            for dy in [-11., 0., 11.] {
-                let target = point(row.right() - px(12.) + px(dx), row.center().y + px(dy));
+        for dx in [-8., 0., 8.] {
+            for dy in [-8., 0., 8.] {
+                let target = point(row.right() - px(18.) + px(dx), row.center().y + px(dy));
                 window.simulate_mouse_move(target);
                 window.draw();
                 window.simulate_click(target, MouseButton::Left);
@@ -5781,6 +5719,108 @@ mod tests {
             let _ = std::fs::remove_dir_all(parent);
         }
     }
+    #[test]
+    fn project_actions_cover_trigger_edges_keyboard_focus_and_action_events() {
+        let path = std::env::temp_dir()
+            .join(format!("echora-project-actions-{}", std::process::id()))
+            .join("preferences.json");
+        let store = WorkspaceStore::with_preferences_path(SidebarBackend::new(), path.clone());
+        store.refresh_all();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while store.snapshot().loading.projects || store.snapshot().loading.recent {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut app = TestApp::new();
+        let mut window = app.open_window_with_options(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(0.), px(0.)),
+                    size(px(900.), px(700.)),
+                ))),
+                ..Default::default()
+            },
+            |_, cx| SidebarView::new(ThemeMode::Dark, false, store.clone(), cx),
+        );
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let events = recorded.clone();
+        window.update(|_, _, cx| {
+            cx.subscribe(
+                &cx.entity(),
+                move |_: &mut SidebarView, _, e: &super::ProjectAction, _| {
+                    events.lock().unwrap().push(e.clone());
+                },
+            )
+            .detach();
+        });
+        window.draw();
+        let id = "project-stable-id";
+        let anchor = window.read(|s, _| s.project_action_bounds.borrow()[id]);
+        assert_eq!(anchor.size, size(px(20.), px(20.)));
+        for dx in [-8., 0., 8.] {
+            for dy in [-8., 0., 8.] {
+                let p = anchor.center() + point(px(dx), px(dy));
+                window.simulate_mouse_move(p);
+                window.draw();
+                window.simulate_click(p, MouseButton::Left);
+                window.draw();
+                assert!(window.read(|s, _| s.project_menu_id.as_deref() == Some(id)));
+                assert!(!window.read(|s, _| s.project_hover_card_is_open()));
+                window.simulate_keystroke("escape");
+                window.draw();
+                window.update(|s, w, _| {
+                    assert!(s.project_menu_id.is_none());
+                    assert!(s.project_action_focus[id].is_focused(w));
+                });
+            }
+        }
+        window.update(|s, w, cx| {
+            s.open_project_actions(id.into(), true, w, cx);
+        });
+        window.draw();
+        window.simulate_keystroke("enter");
+        window.draw();
+        assert_eq!(store.snapshot().preferences.pinned_project_ids, [id]);
+        window.update(|s, w, cx| {
+            s.snapshot = store.snapshot();
+            s.open_project_actions(id.into(), true, w, cx);
+        });
+        window.draw();
+        window.simulate_keystroke("u");
+        window.simulate_keystroke("enter");
+        window.draw();
+        // With a Chinese test locale, Home reaches the same first entry.
+        if !store.snapshot().preferences.pinned_project_ids.is_empty() {
+            window.update(|s, w, cx| s.open_project_actions(id.into(), true, w, cx));
+            window.draw();
+            window.simulate_keystroke("home");
+            window.simulate_keystroke("enter");
+            window.draw();
+        }
+        assert!(store.snapshot().preferences.pinned_project_ids.is_empty());
+        window.update(|s, w, cx| {
+            s.snapshot = store.snapshot();
+            s.snapshot.capabilities = AgentCapabilities::new([
+                AgentCapability::ProjectUpdate,
+                AgentCapability::ProjectDelete,
+                AgentCapability::ThreadArchive,
+            ]);
+            for index in [1, 3, 4] {
+                s.open_project_actions(id.into(), true, w, cx);
+                s.activate_project_action(index, w, cx);
+            }
+        });
+        assert_eq!(
+            *recorded.lock().unwrap(),
+            vec![
+                super::ProjectAction::Edit(id.into()),
+                super::ProjectAction::Archive(id.into()),
+                super::ProjectAction::Remove(id.into())
+            ]
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     #[test]
     fn projects_options_share_sidebar_choices_and_return_focus_after_hiding_projects() {
         let path = std::env::temp_dir()

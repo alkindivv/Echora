@@ -402,6 +402,13 @@ impl ChatApp {
             this.open_project_creation(cx);
         })
         .detach();
+        cx.subscribe(
+            &sidebar,
+            |this, _, action: &crate::components::sidebar::ProjectAction, cx| {
+                this.open_project_action(action.clone(), cx);
+            },
+        )
+        .detach();
         // Each handler shows the chat first and only then leaves the Pull
         // Requests page, so the chat's panel is restored once, not the one of
         // the chat the window leaves.

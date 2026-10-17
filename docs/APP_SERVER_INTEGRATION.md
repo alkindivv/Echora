@@ -205,7 +205,7 @@ Composer 的按钮呈现与激活共用状态判定：运行中有草稿时发�
 
 **Shell 命令**（`thread/shellCommand`）：Echora 新增，参考没有入口。输入框文本以 `!` 开头（且不在侧边聊天、编辑队列项或目标草稿中）时，输入框底部显示警告色「Shell · 在沙盒外运行」，Enter 发送去掉 `!` 并去除首尾空白后的命令，空命令不发送。回执 `{}` 只表示已接受：空闲线程由服务端发起一轮（无 userMessage）承载 source=userShell 的 commandExecution，由客户端按服务端轮次接管；运行中的模型轮次则把命令并入该轮。命令卡片默认展开，显示运行中、完成、失败（exitCode≠0）、超时（见 Item 表）与中断；停止沿用 `turn/interrupt`。RPC 失败恢复输入框文本并提示。
 
-**自定义分区**（`threadSection/*`、`thread/section/move`）：侧栏顺序为置顶、自定义分区、项目、最近。分区与聊天归属存在服务端（`threadSection/list` 中 Pinned 之外的分区，聊天按 `thread/list{sectionId}` 读取）；分区顺序、分区内的项目与折叠状态存在本地 UI 偏好（`section_order`、`section_projects`、`collapsed_section_ids`），与参考把分区存在本地全局状态再镜像到 app-server 的做法对应。分区头可折叠、可拖动排序，悬停显示选项按钮，菜单为「在{分区}中新建聊天」、「编辑」、「归档聊天」、「全部标为已读」、「移除分区」；聊天与项目菜单增加「移至分区“X”」（当前分区打勾）与「新建分区…」，项目区选项菜单也可新建分区；聊天与项目行可拖入分区，拖回项目或最近区域即移出，空分区显示「将聊天或项目拖到这里」。「新建分区／编辑分区」对话框沿用重命名对话框的 420×185 布局，副标题「按你的方式组织聊天和项目」，Esc 关闭，编辑时空名不可保存。「在{分区}中新建聊天」的草稿在服务端建立线程后移入该分区。刷新以分区 generation 防止迟到的结果覆盖新建或删除。参考账号为 API key 登录，侧栏不显示自定义分区，因此只有代码与协议依据，没有参考截图；对话框以参考的重命名对话框为基准。
+**自定义分区**（`threadSection/*`、`thread/section/move`）：侧栏顺序为置顶、自定义分区、项目、最近。分区与聊天归属存在服务端（`threadSection/list` 中 Pinned 之外的分区，聊天按 `thread/list{sectionId}` 读取）；分区顺序、分区内的项目与折叠状态存在本地 UI 偏好（`section_order`、`section_projects`、`collapsed_section_ids`），与参考把分区存在本地全局状态再镜像到 app-server 的做法对应。分区头可折叠、可拖动排序，悬停显示选项按钮，菜单为「在{分区}中新建聊天」、「编辑」、「归档聊天」、「全部标为已读」、「移除分区」；聊天菜单提供「移至分区“X”」（当前分区打勾）与「新建分区…」；聊天与项目行可拖入分区，拖回项目或最近区域即移出，空分区显示「将聊天或项目拖到这里」。「新建分区／编辑分区」对话框沿用重命名对话框的 420×185 布局，副标题「按你的方式组织聊天和项目」，Esc 关闭，编辑时空名不可保存。「在{分区}中新建聊天」的草稿在服务端建立线程后移入该分区。刷新以分区 generation 防止迟到的结果覆盖新建或删除。参考账号为 API key 登录，侧栏不显示自定义分区，因此只有代码与协议依据，没有参考截图；对话框以参考的重命名对话框为基准。
 
 **能力读取与记忆整合状态**（`modelProvider/capabilities/read`、`memory/status`）：按任务书作为 Echora 新增行为，参考都不展示。能力在读取配置和权限目录时按 generation 读取，门控见总表；`memory/status` 在打开个性化设置与 `/memories` 对话框时读取，显示见总表。探针记录（fake provider、ollama、lmstudio 全为 true，amazon-bedrock 的 imageGeneration 为 false；新 CODEX_HOME 返回 `v2ConsolidatedThreads:0, v2Ready:false`，记忆关闭时同样返回）见 `artifacts/batch3-baseline-20260929`。
 
@@ -360,12 +360,12 @@ Hook 字段范围：eventName 支持 preToolUse、permissionRequest、postToolUs
 | `process/spawn` | 实验 | 未接入 | — | — |
 | `process/writeStdin` | 实验 | 未接入 | — | — |
 | `project/create` | 实验 | 已接入 | 发送 idempotencyKey、name、roots[{path}]；原生表单支持名称与多个规范化源目录，未选目录时创建 `~/Documents/Echora` 下的唯一 Git 工作目录。等待 result.project 后更新列表、激活项目草稿；失败保留表单与目录以供重试。图标／表情符号为本机 UI 偏好；远程主机连接未实现。 | `manager/workspace` |
-| `project/delete` | 实验 | 已接入 | 按 projectId 删除；同步移除项目及关联列表状态。 | `manager/workspace` |
+| `project/delete` | 实验 | 已接入 | 项目行菜单或编辑窗口经确认后按 projectId 移除；等待结果，失败可重试；成功清理本机固定、符号和分区归属，保留文件与聊天。 | `manager/workspace` |
 | `project/import` | 实验 | 未接入 | — | — |
 | `project/list` | 实验 | 已接入 | 按 position 升序分页；提供侧栏和草稿项目选择器数据。选择或清除时同步草稿 projectId/cwd 并保留输入；首条消息通过 thread/start 使用该上下文。 | `manager/workspace` |
-| `project/move` | 实验 | 已接入 | projectId、nullable beforeProjectId；使用服务端顺序。 | `manager/workspace` |
+| `project/move` | 实验 | 已接入 | 项目行拖动发送 projectId、nullable beforeProjectId；使用服务端顺序。 | `manager/workspace` |
 | `project/read` | 实验 | 未接入 | — | — |
-| `project/update` | 实验 | 已接入 | 按需发送 name、roots；以 result.project 更新工作区。 | `manager/workspace` |
+| `project/update` | 实验 | 已接入 | 编辑窗口发送 name、规范化去重的 roots（允许为空）；等待 result.project 更新工作区后关闭，失败保留表单重试。符号和项目固定为本机 UI 偏好。 | `manager/workspace` |
 | `remoteControl/client/list` | 实验 | 未接入 | — | — |
 | `remoteControl/client/revoke` | 实验 | 未接入 | — | — |
 | `remoteControl/disable` | 实验 | 未接入 | — | — |

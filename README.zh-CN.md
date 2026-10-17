@@ -107,7 +107,7 @@ Cargo 包和可执行文件目前仍名为 `gpui-chat-clone`，现有构建与�
 | 打开会话 | 侧栏项目、最近、归档或搜索 |
 | 选择草稿项目 | 输入框上方项目按钮或首页标题中带下划线的项目名；支持搜索、方向键、Enter 与 Esc |
 | 创建项目 | Projects 标题 `+` 或项目选择器 → 新建项目；选择本机源文件夹，或不添加文件夹直接创建工作目录 |
-| 查看项目信息 | 悬停侧栏项目行：卡片显示项目名、任务数、仓库、工作目录和“编辑项目” |
+| 查看或管理项目 | 悬停侧栏项目行查看信息卡片；行右侧 `…` 菜单提供固定／取消固定、编辑、在 Finder 中显示、归档聊天和移除项目 |
 | 查看任务信息 | 悬停项目下的侧栏任务行：卡片显示任务标题、环境图标与距今时间，以及任务所属项目 |
 | 重命名任务 | 双击侧栏任务行：第一次点击进入对应会话，第二次弹出与 ChatGPT 一致的居中重命名面板（标题输入框默认全选，可用 `取消`、`保存`、`Esc`、关闭按钮或蒙层退出） |
 | 搜索聊天 | 侧边栏搜索按钮 → 历史会话搜索弹窗（`Enter` 打开、`⌘1`–`⌘9` 选择、`Esc` 关闭） |
@@ -160,7 +160,8 @@ Cargo 包和可执行文件目前仍名为 `gpui-chat-clone`，现有构建与�
 - **Shell 命令：** 输入框以 `!` 开头时（侧边聊天、编辑队列项和目标草稿除外），底部显示警告标签「Shell · 在沙盒外运行」；按 Enter 发送这一行的其余部分，新聊天会先建立线程。服务端的 user-shell 轮次显示为默认展开的命令卡片，状态有运行中、完成、失败、超时和中断。命令被拒绝时文字放回输入框并提示。ChatGPT 没有这个入口。
 - **创建项目**：源文件夹会转为规范路径并去重；取消、Esc、关闭按钮与遮罩关闭时重置表单，并丢弃尚未完成的文件夹选择。创建失败保留名称、标记和已准备的目录以供重试。键盘焦点保持在对话框内。app-server 项目没有外观字段，项目标记保存在本机 UI 偏好。设备菜单与参考应用的本机设备菜单一致，提供“此电脑”；尚未实现远程主机连接。表情符号目录使用 Unicode Emoji 17.0 数据，许可见 `assets/UNICODE-LICENSE.txt`。
 - **侧栏聊天控件：**“最近”标题提供清空项目选择并聚焦输入框的新聊天入口，以及分项目显示／合并显示、最近更新／手动排序、显示项目的嵌套菜单。“项目”标题提供同一套布局与聊天排序子菜单，锚定自身按钮；两个入口共享选项。选项和手动聊天顺序在重启后保留；拖拽只改变顺序，不修改项目或分区归属。“最近”包含项目内聊天，并随滚动显示更多行。
-- **自定义分区：** 分区及其中的聊天保存在服务端（`threadSection/*`、`thread/section/move`）；分区顺序、分区内的项目和折叠状态是本地 UI 偏好。移除分区后，其中的聊天回到「最近」。分区头菜单提供「在{分区}中新建聊天」「编辑」「归档聊天」「全部标为已读」「移除分区」；聊天与项目菜单提供「移至分区」和「新建分区…」。
+- **项目操作：** 固定将项目移入「置顶」并保存在本机。编辑支持保存名称、符号和源文件夹（可以清空），取消丢弃修改。「归档聊天」和「移除项目」先确认再等待后端结果，失败保留窗口供重试；归档只影响该项目的聊天，移除项目保留文件和现有聊天。菜单支持键盘导航、点击外部关闭和焦点恢复。
+- **自定义分区：** 分区及其中的聊天保存在服务端（`threadSection/*`、`thread/section/move`）；分区顺序、分区内的项目和折叠状态是本地 UI 偏好。移除分区后，其中的聊天回到「最近」。分区头菜单提供「在{分区}中新建聊天」「编辑」「归档聊天」「全部标为已读」「移除分区」；聊天菜单提供「移至分区」和「新建分区…」；项目可拖入或拖出分区，也可在「项目」中拖动排序。
 - **提供方能力与记忆状态：** `modelProvider/capabilities/read` 门控「设置 → 配置」的网页搜索（提供方不支持时只能选「已禁用」，并说明原因）以及图片生成失败后的重试；`memory/status` 在「设置 → 个性化」增加「记忆整合」行，并在「聊天记忆」对话框显示状态。ChatGPT 不展示这两项，均为 Echora 新增。`thread/loaded/list` 在打开线程时核对本地的已加载记录，服务端不再持有该线程时会重新 resume。
 - **任务附件与后台终端：** 关联到聊天的拉取请求来自 `thread/attachment/list`（每页 99 条，因为 0.158 在单页超过 100 条时会丢弃其余部分），只在关联找到的或新创建的拉取请求时写入，从不因识别到命令而写入；服务端不支持附件时由 UI 偏好中的本地镜像代替。拉取请求状态在后台通过 `gh` 读取，读不到时不显示；没有附件记录的旧聊天显示其分支的拉取请求，并与 ChatGPT 一样回填一次。停止后台终端时一次请求停止该聊天的全部终端，请求期间显示加载图标，失败只提示一次且不重试；命令卡片只在服务端完成该命令后才变为「Ran …」。`thread/metadata/update` 在每次发送后以及识别到 `git checkout`／`switch` 后记录聊天的分支。摘要面板的其他分区、环境与 Git 操作菜单以及工作树归档与恢复尚未实现。
 - **分支与运行位置：** 新聊天工具栏可搜索、滚动浏览全部本地分支和仅远端存在的分支，实际切换 Git 检出并创建分支。创建弹窗的「设置前缀」打开 Git 设置，前缀保存在本地 UI 偏好。Git 冲突或分支被其他工作树占用时显示错误，保留本地修改。「本地」使用项目检出目录；「新建本地工作树」选择起点后，在首次发送时于 `CODEX_HOME/worktrees` 下创建 detached 工作树。选择本地文件状态时复制暂存、未暂存、二进制与未跟踪修改，并保留源检出；发送前取消不创建目录。聊天、文件树、审查面板与新终端标签跟随新目录，既有 Shell 保持原目录。失败保留输入，允许重试。
@@ -348,6 +349,7 @@ node scripts/cdp_pin_reference_layout.mjs --layout=legacy --wait=60
 | 真实线程双主题 | `python3 scripts/capture_resume_reference.py --endpoint "$CHATGPT_CDP_HTTP" --manifest /path/to/manifest.json`；`python3 scripts/capture_resume_gpui.py --manifest /path/to/manifest.json --output artifacts/resume-alignment/actual` |
 | 终端 / 文件 | `node scripts/cdp_capture_terminal.mjs artifacts/terminal`；`node scripts/cdp_capture_file_panel.mjs artifacts/file-panel` |
 | 项目与模型控件 | `CHATGPT_CDP_HTTP="$CHATGPT_CDP_HTTP" node scripts/verify_project_composer_reference.mjs --output=artifacts/project-composer/reference` 驱动专用旧版参考实例，检查项目搜索、创建、取消、不在项目中工作、模型选择、推理强度与重置，并保存截图和几何数据。`cargo test project` 与 `cargo test model_picker` 验证原生指针、键盘、焦点、草稿目录同步及菜单状态。 |
+| 侧栏项目操作 | `cargo test project_` 覆盖编辑、确认焦点、固定持久化、归档范围与移除保留行为。在使用隔离 `CODEX_HOME` 的专用打包实例上，运行 `scripts/run_native_verification.sh workspace --app='GPUI Capture (SLUG)' --scenario=project-actions --project=NAME --capture=/absolute/internal/frame.png --output=artifacts/project-actions/native`，验证悬停、固定／取消固定、菜单、编辑与确认取消。`--scenario=project-card-bottom --project=NAME` 检查靠近窗口底部的项目行。写入场景要求一次性的 `Issue 32 fixture` 项目、一个源文件夹与一条已保存聊天；使用 `--scenario=project-actions-write --project='Issue 32 fixture' --source=/absolute/issues-40-29-32/project-action-fixture` 验证保存／重试、清空目录、归档和移除。 |
 | 分支与运行位置 | `cargo test --features screenshot workspace` 覆盖真实 Git 操作、首次发送创建工作树、错误、键盘导航与面板目录同步。`CHATGPT_CDP_HTTP=http://127.0.0.1:PORT node scripts/verify_workspace_controls_reference.mjs` 在专用旧版参考实例采集两种主题；`scripts/run_native_verification.sh workspace --app='GPUI Capture (SLUG)' --capture=/absolute/internal/frame.png --output=artifacts/workspace-controls/native` 通过可访问性树驱动打包后的专用原生实例，记录对应菜单状态。使用包含 `main` 和 `topic/long-acceptance-branch-000` 至 `149` 的隔离项目测试仓库时，添加 `--repository=/absolute/fixture` 可验证实际分支切换、创建及首次发送的工作目录。 |
 | 审查 / 侧边聊天 | `node scripts/cdp_capture_review.mjs artifacts/review-reference`；`node scripts/cdp_capture_side_chat.mjs artifacts/side-chat reference` |
 | 审查弹层 | `node scripts/cdp_capture_review_menus.mjs --output=artifacts/review-menus` 采集比较范围、查看选项与分支选择三个弹层，双主题并附带计算样式；`python3 scripts/compare_review_menus.py --reference DIR --gpui DIR --output DIR --scale 2` 逐像素比对两侧截图，输出裁切图、差异图与报告 |

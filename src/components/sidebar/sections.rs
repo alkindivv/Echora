@@ -115,6 +115,7 @@ impl SidebarView {
             .custom_sections
             .iter()
             .flat_map(|section| section.projects.iter())
+            .chain(self.snapshot.preferences.pinned_project_ids.iter())
             .map(String::as_str)
             .collect()
     }
@@ -593,7 +594,12 @@ impl SidebarView {
         project_id: &ProjectId,
         name: &str,
     ) -> Option<SidebarItemDrag> {
-        self.custom_sections_enabled().then(|| SidebarItemDrag {
+        (self.custom_sections_enabled()
+            || self
+                .snapshot
+                .capabilities
+                .supports(crate::agent::AgentCapability::ProjectMove))
+        .then(|| SidebarItemDrag {
             item: SectionItem::Project(project_id.clone()),
             label: name.to_owned().into(),
             mode: self.mode,

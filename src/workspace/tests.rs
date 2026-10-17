@@ -221,6 +221,9 @@ impl AgentBackend for FakeWorkspaceBackend {
         if let Some(name) = update.name {
             value.name = name;
         }
+        if let Some(roots) = update.roots {
+            value.roots = roots;
+        }
         response(Ok(value))
     }
 
@@ -1049,5 +1052,147 @@ fn sidebar_layout_and_manual_order_survive_restart_and_do_not_move_threads() {
         preferences.ordered(&store.snapshot().recent_threads)[0].thread_id,
         "a"
     );
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn project_pin_survives_restart_and_is_exclusive_with_custom_sections() {
+    let path = test_preferences_path("project-pin");
+    let store = WorkspaceStore::with_preferences_path(FakeWorkspaceBackend::new(), path.clone());
+    store.update(|s| s.projects = vec![project("a", 0)]);
+    store.move_to_custom_section(SectionItem::Project("a".into()), Some("section".into()));
+    store.set_project_pinned("a".into(), true);
+    store.set_project_pinned("a".into(), true);
+    assert_eq!(store.snapshot().preferences.pinned_project_ids, ["a"]);
+    assert!(
+        store
+            .snapshot()
+            .preferences
+            .section_projects
+            .values()
+            .all(Vec::is_empty)
+    );
+    assert!(!store.snapshot().preferences.pinned_collapsed);
+    let reopened = WorkspaceStore::with_preferences_path(FakeWorkspaceBackend::new(), path.clone());
+    assert_eq!(reopened.snapshot().preferences.pinned_project_ids, ["a"]);
+    store.move_to_custom_section(SectionItem::Project("a".into()), Some("section".into()));
+    assert!(store.snapshot().preferences.pinned_project_ids.is_empty());
+    store.set_project_pinned("missing".into(), true);
+    assert!(store.snapshot().preferences.pinned_project_ids.is_empty());
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn project_edit_completion_and_removal_preserve_files_and_chats() {
+    let path = test_preferences_path("project-edit-remove");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let source = path.parent().unwrap().join("source.txt");
+    fs::write(&source, "keep this file").unwrap();
+    let backend = FakeWorkspaceBackend::new();
+    let store = WorkspaceStore::with_preferences_path(backend.clone(), path.clone());
+    store.update(|s| {
+        s.projects = vec![project("project-a", 0)];
+        s.recent_threads = vec![thread("thread-a", Some("project-a"))];
+    });
+    store.set_project_pinned("project-a".into(), true);
+    store.set_project_marker(
+        "project-a".into(),
+        Some(super::ProjectMarker {
+            emoji: None,
+            icon: "flask".into(),
+            color: 2,
+        }),
+    );
+    let updated = store
+        .update_project(
+            "project-a".into(),
+            UpdateProject {
+                name: Some("Edited".into()),
+                roots: Some(Vec::new()),
+            },
+        )
+        .recv_blocking()
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.name, "Edited");
+    assert!(store.snapshot().projects[0].roots.is_empty());
+    assert!(!store.snapshot().is_pending_project("project-a"));
+    store
+        .delete_project("project-a".into())
+        .recv_blocking()
+        .unwrap()
+        .unwrap();
+    wait_until(|| !store.snapshot().loading.projects && !store.snapshot().loading.recent);
+    let snapshot = store.snapshot();
+    assert!(
+        !snapshot
+            .projects
+            .iter()
+            .any(|p| p.project_id == "project-a")
+    );
+    assert!(snapshot.preferences.pinned_project_ids.is_empty());
+    assert!(
+        !snapshot
+            .preferences
+            .project_markers
+            .contains_key("project-a")
+    );
+    assert!(
+        snapshot
+            .recent_threads
+            .iter()
+            .any(|t| t.thread_id == "thread-a")
+    );
+    assert_eq!(fs::read_to_string(source).unwrap(), "keep this file");
+    assert!(
+        !backend
+            .calls()
+            .iter()
+            .any(|c| c.starts_with("thread/archive") || c.starts_with("thread/delete"))
+    );
+    let reopened = WorkspaceStore::with_preferences_path(FakeWorkspaceBackend::new(), path.clone());
+    assert!(
+        reopened
+            .snapshot()
+            .preferences
+            .pinned_project_ids
+            .is_empty()
+    );
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn project_archive_deduplicates_collections_and_keeps_other_projects() {
+    let path = test_preferences_path("project-archive");
+    let backend = FakeWorkspaceBackend::new();
+    let store = WorkspaceStore::with_preferences_path(backend.clone(), path.clone());
+    store.update(|s| {
+        s.projects = vec![project("a", 0), project("b", 1)];
+        s.recent_threads = vec![thread("one", Some("a")), thread("other", Some("b"))];
+        s.pinned_threads = vec![thread("one", Some("a")), thread("two", Some("a"))];
+        s.custom_sections = vec![CustomSection {
+            section: ThreadSection {
+                section_id: "custom".into(),
+                name: "Custom".into(),
+                appearance: None,
+            },
+            projects: vec![],
+            threads: vec![thread("three", Some("a"))],
+        }];
+    });
+    let ids = store.snapshot().project_thread_ids("a");
+    assert_eq!(ids, ["one", "two", "three"]);
+    assert_eq!(store.archive_threads(ids).recv_blocking().unwrap(), (3, 0));
+    assert!(store.snapshot().project_thread_ids("a").is_empty());
+    assert_eq!(store.snapshot().project_thread_ids("b"), ["other"]);
+    let calls = backend.calls();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|c| c.starts_with("thread/archive:"))
+            .count(),
+        3
+    );
+    assert!(!calls.contains(&"thread/archive:other".into()));
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }

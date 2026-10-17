@@ -117,10 +117,24 @@ impl ImagePreviewState {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(super) enum ProjectConfirmation {
+    Remove {
+        project_id: crate::agent::ProjectId,
+        name: String,
+    },
+    Archive {
+        project_id: crate::agent::ProjectId,
+        name: String,
+    },
+}
+
 pub(super) struct ProjectCreationState {
     pub(super) open: bool,
     pub(super) name: Entity<crate::components::prompt_input::PromptInput>,
     pub(super) roots: Vec<PathBuf>,
+    pub(super) editing: Option<crate::agent::ProjectId>,
+    pub(super) confirmation: Option<ProjectConfirmation>,
     pub(super) creating: bool,
     pub(super) error: Option<String>,
     pub(super) device_menu: bool,
@@ -136,6 +150,7 @@ pub(super) struct ProjectCreationState {
     pub(super) focus: FocusHandle,
     pub(super) focus_pending: bool,
     pub(super) close_focus: FocusHandle,
+    pub(super) confirmation_cancel_focus: FocusHandle,
     pub(super) device_focus: FocusHandle,
 }
 
@@ -151,6 +166,8 @@ impl ProjectCreationState {
                 )
             }),
             roots: Vec::new(),
+            editing: None,
+            confirmation: None,
             creating: false,
             error: None,
             device_menu: false,
@@ -172,6 +189,7 @@ impl ProjectCreationState {
             focus: cx.focus_handle().tab_stop(true),
             focus_pending: false,
             close_focus: cx.focus_handle().tab_stop(true),
+            confirmation_cancel_focus: cx.focus_handle().tab_stop(true),
             device_focus: cx.focus_handle().tab_stop(true),
         }
     }

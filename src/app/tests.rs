@@ -2262,3 +2262,39 @@ fn panel_tab_strip_buttons_add_and_close_tabs() {
     window.draw();
     assert!(!window.read(|chat, _| chat.right_panel.open));
 }
+
+#[test]
+fn project_confirmation_tabs_stay_inside_and_escape_never_submits() {
+    let mut app = TestApp::new();
+    let mut window = app.open_window(|_, cx| ChatApp::new(ThemeMode::Dark, false, cx));
+    for confirmation in [
+        super::state::ProjectConfirmation::Remove {
+            project_id: "fixture".into(),
+            name: "Fixture".into(),
+        },
+        super::state::ProjectConfirmation::Archive {
+            project_id: "fixture".into(),
+            name: "Fixture".into(),
+        },
+    ] {
+        window.update(|chat, _, cx| {
+            chat.open_project_creation(cx);
+            chat.project_creation.confirmation = Some(confirmation);
+        });
+        window.draw();
+        for key in ["tab", "shift-tab"] {
+            for _ in 0..12 {
+                window.simulate_keystroke(key);
+                window.draw();
+                window.update(|chat, w, cx| {
+                    assert!(chat.project_creation.focus.contains_focused(w, cx))
+                });
+            }
+        }
+        window.simulate_keystroke("escape");
+        window.draw();
+        assert!(window.read(|chat, _| !chat.project_creation.open
+            && !chat.project_creation.creating
+            && chat.project_creation.confirmation.is_none()));
+    }
+}

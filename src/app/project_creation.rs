@@ -1,5 +1,6 @@
 //! Native project setup: name, source folders, completion, and draft selection.
 
+mod editing;
 mod marker;
 
 use super::ChatApp;
@@ -25,6 +26,8 @@ impl ChatApp {
         self.project_creation
             .name
             .update(cx, |input, cx| input.set_mode(self.mode, cx));
+        self.project_creation.editing = None;
+        self.project_creation.confirmation = None;
         self.project_creation.open = true;
         self.project_creation.error = None;
         self.project_creation.focus_pending = true;
@@ -39,6 +42,8 @@ impl ChatApp {
             return;
         }
         self.project_creation.open = false;
+        self.project_creation.editing = None;
+        self.project_creation.confirmation = None;
         self.project_creation.device_menu = false;
         self.project_creation.marker_menu = false;
         self.project_creation.focus_pending = false;
@@ -95,6 +100,14 @@ impl ChatApp {
 
     pub(super) fn advance_project_creation(&mut self, cx: &mut Context<Self>) {
         if self.project_creation.creating {
+            return;
+        }
+        if self.project_creation.confirmation.is_some() {
+            self.confirm_project_action(cx);
+            return;
+        }
+        if self.project_creation.editing.is_some() {
+            self.save_project_edit(cx);
             return;
         }
         let name = self.project_creation.name.read(cx).text().trim().to_owned();
@@ -229,6 +242,10 @@ impl ChatApp {
             if !self.project_creation.focus.contains_focused(window, cx) {
                 if event.keystroke.modifiers.shift {
                     self.project_creation.close_focus.focus(window, cx);
+                } else if self.project_creation.confirmation.is_some() {
+                    self.project_creation
+                        .confirmation_cancel_focus
+                        .focus(window, cx);
                 } else {
                     self.project_creation
                         .name
@@ -268,11 +285,20 @@ impl ChatApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<Div> {
+        if self.project_creation.confirmation.is_some() {
+            return self.project_confirmation_overlay(theme, cx);
+        }
+        let editing = self.project_creation.editing.is_some();
         let creating = self.project_creation.creating;
+        let title = crate::i18n::text(if editing {
+            "编辑项目"
+        } else {
+            "创建项目"
+        });
         let mut sources = div()
             .id("project-creation-sources")
             .w_full()
-            .rounded(px(12.5))
+            .rounded(px(if editing { 8. } else { 12.5 }))
             .border_1()
             .border_color(theme.border)
             .bg(theme.control)
@@ -280,7 +306,16 @@ impl ChatApp {
             .line_height(px(18.5714))
             .max_h(px(360.))
             .overflow_y_scroll();
-        if self.project_creation.roots.is_empty() {
+        if self.project_creation.roots.is_empty() && editing {
+            sources = sources.child(div().id("project-edit-choose-sources")
+                .role(gpui::Role::Button).aria_label(crate::i18n::format!("选择源文件夹" => "Choose source folders"))
+                .focusable().tab_stop(true).h(px(96.)).w_full().flex().flex_col().items_center().justify_center().gap(px(4.)).cursor_pointer()
+                .text_color(theme.text_tertiary).hover(move |s|s.bg(theme.sidebar_hover))
+                .child(icon("project-add-folder",theme.text_tertiary.into()).size(px(16.)))
+                .child(crate::i18n::format!("添加 Codex 可以读取和编辑的文件夹" => "Add folders Codex can read and edit"))
+                .on_click(cx.listener(Self::add_project_sources_click))
+                .on_key_down(cx.listener(|this,e: &KeyDownEvent,_,cx| {if matches!(e.keystroke.key.as_str(),"enter"|"space") {this.add_project_sources(cx);cx.stop_propagation();}})));
+        } else if self.project_creation.roots.is_empty() {
             sources = sources.child(div().h(px(102.5625)).p(px(24.)).flex().flex_col().items_center().gap(px(12.))
                 .child(div().id("project-creation-device").role(gpui::Role::Button).aria_label(crate::i18n::format!("项目所在设备" => "Project device"))
                     .track_focus(&self.project_creation.device_focus).tab_stop(true).h(px(18.5625)).flex().items_center().gap(px(4.)).text_size(px(13.)).line_height(px(18.5714)).text_color(theme.text.alpha(0.65)).cursor_pointer()
@@ -294,9 +329,24 @@ impl ChatApp {
                     .child(icon("project-add-folder",theme.text.into()).size(px(16.))).child(crate::i18n::text("添加"))));
         } else {
             for (index, path) in self.project_creation.roots.iter().enumerate() {
-                let path = path.display().to_string();
+                let full_path = path.display().to_string();
+                let path = if editing {
+                    path.file_name()
+                        .unwrap_or(path.as_os_str())
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    full_path.clone()
+                };
                 sources = sources.child(
                     div()
+                        .id(format!("project-source-{index}"))
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| {
+                                crate::components::composer::TrayTooltip(full_path.clone().into())
+                            })
+                            .into()
+                        })
                         .h(px(48.))
                         .px(px(12.))
                         .flex()
@@ -320,7 +370,7 @@ impl ChatApp {
                                 .aria_label(crate::i18n::format!("移除文件夹" => "Remove folder"))
                                 .focusable()
                                 .tab_stop(true)
-                                .size(px(28.))
+                                .size(px(if editing { 24. } else { 28. }))
                                 .rounded_full()
                                 .flex()
                                 .items_center()
@@ -355,7 +405,7 @@ impl ChatApp {
                     .aria_label(crate::i18n::format!("添加文件夹" => "Add folder"))
                     .focusable()
                     .tab_stop(true)
-                    .h(px(36.))
+                    .h(px(if editing { 48. } else { 36. }))
                     .px(px(12.))
                     .flex()
                     .items_center()
@@ -369,14 +419,20 @@ impl ChatApp {
                             cx.stop_propagation();
                         }
                     }))
-                    .child(icon("add", theme.text.into()).size(px(16.)))
+                    .child(
+                        icon(
+                            if editing { "project-add-folder" } else { "add" },
+                            theme.text.into(),
+                        )
+                        .size(px(16.)),
+                    )
                     .child(crate::i18n::format!("添加文件夹" => "Add folder")),
             );
         }
         let name = div()
             .h(px(40.))
             .w_full()
-            .rounded(px(15.))
+            .rounded(px(if editing { 12. } else { 15. }))
             .border_1()
             .border_color(if self.project_creation.error.is_some() {
                 theme.warning
@@ -462,7 +518,7 @@ impl ChatApp {
         let dialog = div()
             .id("project-creation-dialog")
             .role(gpui::Role::Dialog)
-            .aria_label(crate::i18n::text("创建项目"))
+            .aria_label(title)
             .relative()
             .w(px(520.))
             .max_w(gpui::relative(0.92))
@@ -488,7 +544,7 @@ impl ChatApp {
                     .text_size(px(20.))
                     .line_height(px(28.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child(crate::i18n::text("创建项目")),
+                    .child(title),
             )
             .child(div().mt(px(12.)).child(name))
             .child(
@@ -511,11 +567,32 @@ impl ChatApp {
             })
             .child(
                 div()
-                    .mt(px(32.))
+                    .mt(px(if editing { 20. } else { 32. }))
                     .flex()
                     .items_center()
                     .justify_end()
                     .gap(px(12.))
+                    .when(editing, |row| {
+                        row.child(
+                            self.project_button(
+                                "project-edit-remove",
+                                crate::i18n::format!("移除本地项目" => "Remove local project"),
+                                theme,
+                            )
+                            .bg(gpui::rgba(0xe02e2a1a))
+                            .text_color(gpui::rgba(0xe02e2aff))
+                            .on_click(cx.listener(|this, _, _, cx| this.remove_editing_project(cx)))
+                            .on_key_down(cx.listener(
+                                |this, e: &KeyDownEvent, _, cx| {
+                                    if matches!(e.keystroke.key.as_str(), "enter" | "space") {
+                                        this.remove_editing_project(cx);
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            )),
+                        )
+                        .child(div().flex_1())
+                    })
                     .child(
                         self.project_button(
                             "project-creation-cancel",
@@ -537,7 +614,13 @@ impl ChatApp {
                         self.project_button(
                             "project-creation-submit",
                             if creating {
-                                crate::i18n::text("正在创建项目…")
+                                if editing {
+                                    crate::i18n::text("正在保存…")
+                                } else {
+                                    crate::i18n::text("正在创建项目…")
+                                }
+                            } else if editing {
+                                crate::i18n::text("保存")
                             } else {
                                 crate::i18n::text("创建项目")
                             }
@@ -546,7 +629,18 @@ impl ChatApp {
                         )
                         .bg(theme.button)
                         .text_color(theme.button_text)
-                        .when(creating, |b| b.opacity(0.4).cursor_default())
+                        .when(
+                            creating
+                                || (editing
+                                    && self
+                                        .project_creation
+                                        .name
+                                        .read(cx)
+                                        .text()
+                                        .trim()
+                                        .is_empty()),
+                            |b| b.opacity(0.4).cursor_default(),
+                        )
                         .on_click(cx.listener(|this, _, _, cx| this.advance_project_creation(cx)))
                         .on_key_down(cx.listener(
                             |this, e: &KeyDownEvent, _, cx| {

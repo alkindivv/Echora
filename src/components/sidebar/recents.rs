@@ -342,7 +342,7 @@ impl SidebarView {
         cx.notify();
     }
 
-    fn recents_surface(
+    pub(super) fn recents_surface(
         &self,
         id: &'static str,
         width: f32,

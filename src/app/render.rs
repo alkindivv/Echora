@@ -299,6 +299,10 @@ impl Render for ChatApp {
             }
             if self.project_creation.creating {
                 self.project_creation.focus.focus(window, cx);
+            } else if self.project_creation.confirmation.is_some() {
+                self.project_creation
+                    .confirmation_cancel_focus
+                    .focus(window, cx);
             } else {
                 self.project_creation
                     .name
@@ -557,6 +561,10 @@ impl Render for ChatApp {
                 if this.sidebar.read(cx).activity_archive_confirmation().is_some() {
                     this.sidebar
                         .update(cx, |sidebar, cx| sidebar.dismiss_activity_archive(cx));
+                    cx.stop_propagation();
+                    return;
+                }
+                if this.sidebar.update(cx, |sidebar, cx| sidebar.dismiss_project_actions(window, cx)) {
                     cx.stop_propagation();
                     return;
                 }

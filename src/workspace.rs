@@ -867,16 +867,24 @@ impl WorkspaceStore {
         completion
     }
 
-    pub fn update_project(self: &Arc<Self>, project_id: ProjectId, update: UpdateProject) {
+    pub fn update_project(
+        self: &Arc<Self>,
+        project_id: ProjectId,
+        update: UpdateProject,
+    ) -> Receiver<WorkspaceResult<Project>> {
         let operation = WorkspaceOperation::UpdateProject(project_id.clone());
         self.begin(operation.clone());
         let receiver = self.backend.update_project(project_id, update);
+        let (sender, completion) = async_channel::bounded(1);
         let store = Arc::clone(self);
-        std::thread::spawn(
-            move || match receive(receiver, crate::i18n::text("更新项目")) {
+        std::thread::spawn(move || {
+            let result = receive(receiver, crate::i18n::text("更新项目"));
+            match &result {
                 Ok(project) => {
                     if !store.deleted_projects().contains(&project.project_id) {
-                        store.update(|snapshot| upsert_project(&mut snapshot.projects, project));
+                        store.update(|snapshot| {
+                            upsert_project(&mut snapshot.projects, project.clone())
+                        });
                     }
                     store.finish(&operation, None);
                 }
@@ -884,23 +892,47 @@ impl WorkspaceStore {
                     &operation,
                     Some(error.user_message(crate::i18n::text("更新项目"))),
                 ),
-            },
-        );
+            }
+            let _ = sender.send_blocking(result);
+        });
+        completion
     }
 
-    pub fn delete_project(self: &Arc<Self>, project_id: ProjectId) {
+    pub fn delete_project(
+        self: &Arc<Self>,
+        project_id: ProjectId,
+    ) -> Receiver<WorkspaceResult<()>> {
         let operation = WorkspaceOperation::DeleteProject(project_id.clone());
         self.begin(operation.clone());
-        let receiver = self.backend.delete_project(project_id);
+        let receiver = self.backend.delete_project(project_id.clone());
+        let (sender, completion) = async_channel::bounded(1);
         let store = Arc::clone(self);
-        std::thread::spawn(
-            move || match receive(receiver, crate::i18n::text("删除项目")) {
+        std::thread::spawn(move || {
+            let result = receive(receiver, crate::i18n::text("删除项目"));
+            match &result {
                 Ok(()) => {
-                    if let WorkspaceOperation::DeleteProject(project_id) = &operation
-                        && let Ok(mut deleted) = store.deleted_project_ids.lock()
-                    {
+                    if let Ok(mut deleted) = store.deleted_project_ids.lock() {
                         deleted.insert(project_id.clone());
                     }
+                    store.update(|snapshot| {
+                        snapshot.projects.retain(|p| p.project_id != project_id);
+                        snapshot
+                            .preferences
+                            .pinned_project_ids
+                            .retain(|id| id != &project_id);
+                        snapshot.preferences.project_markers.remove(&project_id);
+                        snapshot
+                            .preferences
+                            .collapsed_project_ids
+                            .remove(&project_id);
+                        for ids in snapshot.preferences.section_projects.values_mut() {
+                            ids.retain(|id| id != &project_id);
+                        }
+                        for section in &mut snapshot.custom_sections {
+                            section.projects.retain(|id| id != &project_id);
+                        }
+                    });
+                    store.save_preferences();
                     store.finish(&operation, None);
                     store.refresh_all();
                 }
@@ -908,8 +940,36 @@ impl WorkspaceStore {
                     &operation,
                     Some(error.user_message(crate::i18n::text("删除项目"))),
                 ),
-            },
-        );
+            }
+            let _ = sender.send_blocking(result);
+        });
+        completion
+    }
+
+    pub fn set_project_pinned(&self, project_id: ProjectId, pinned: bool) {
+        self.update(|snapshot| {
+            if !snapshot.projects.iter().any(|p| p.project_id == project_id) {
+                return;
+            }
+            snapshot
+                .preferences
+                .pinned_project_ids
+                .retain(|id| id != &project_id);
+            if pinned {
+                snapshot
+                    .preferences
+                    .pinned_project_ids
+                    .push(project_id.clone());
+                snapshot.preferences.pinned_collapsed = false;
+                for ids in snapshot.preferences.section_projects.values_mut() {
+                    ids.retain(|id| id != &project_id);
+                }
+                for section in &mut snapshot.custom_sections {
+                    section.projects.retain(|id| id != &project_id);
+                }
+            }
+        });
+        self.save_preferences();
     }
 
     pub fn move_project(
@@ -1757,3 +1817,23 @@ pub(crate) mod sections_fake;
 mod sections_tests;
 #[cfg(test)]
 mod tests;
+
+impl WorkspaceSnapshot {
+    pub fn project_thread_ids(&self, project_id: &str) -> Vec<ThreadId> {
+        let mut seen = std::collections::HashSet::new();
+        self.recent_threads
+            .iter()
+            .chain(&self.pinned_threads)
+            .chain(
+                self.custom_sections
+                    .iter()
+                    .flat_map(|section| &section.threads),
+            )
+            .filter(|thread| {
+                project_id_for_thread(thread, &self.projects).as_deref() == Some(project_id)
+            })
+            .filter(|thread| seen.insert(thread.thread_id.clone()))
+            .map(|thread| thread.thread_id.clone())
+            .collect()
+    }
+}

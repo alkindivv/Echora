@@ -33,6 +33,8 @@ pub struct UiPreferences {
     #[serde(default)]
     pub sidebar: SidebarPreferences,
     #[serde(default)]
+    pub pinned_project_ids: Vec<ProjectId>,
+    #[serde(default)]
     pub review: ReviewPreferences,
     #[serde(default)]
     pub skip_side_chat_close_confirmation: bool,

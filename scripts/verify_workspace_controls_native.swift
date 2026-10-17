@@ -126,6 +126,92 @@ if option("scenario") == "capture" {
     print("Verified app-owned capture without Screen Recording or Apple Events")
     exit(0)
 }
+if option("scenario") == "project-card-bottom" {
+    key(53)
+    let trigger=rect(find("Project actions for " + option("project")))
+    let windowRect=rect(elements().first {value($0,kAXRoleAttribute) as? String == "AXWindow"}!)
+    precondition(trigger.midY > windowRect.maxY-180, "Fixture must exercise the bottom window edge")
+    let point=CGPoint(x:trigger.minX-70,y:trigger.midY)
+    CGEvent(mouseEventSource:nil,mouseType:.mouseMoved,mouseCursorPosition:point,mouseButton:.left)!.post(tap:.cghidEventTap)
+    Thread.sleep(forTimeInterval:1.2)
+    let edit=find("Edit project")
+    precondition(rect(edit).maxY <= windowRect.maxY-8, "Hover card edit action overflowed the window")
+    record("00-bottom-card")
+    click(edit);_ = find("Project name");record("01-bottom-edit");key(53)
+    print("Verified bottom project card stays inside the viewport and Edit remains clickable")
+    exit(0)
+}
+if option("scenario") == "project-actions" || option("scenario") == "project-actions-write" {
+    var project = option("project", "Echora")
+    func present(_ label: String) -> Bool { elements().contains { title($0) == label || value($0,kAXIdentifierAttribute) as? String == label } }
+    func confirming() -> Bool {elements().contains {title($0).hasPrefix("Remove ") && title($0).hasSuffix("?") || title($0).hasPrefix("Archive ") && title($0).hasSuffix("?")}}
+    func openActions(_ edge: Int = 0) {
+        key(53)
+        for _ in 0..<4 {
+            click(find("Project actions for " + project),edge:edge)
+            if present("Edit") {return}
+        }
+        fatalError("Project actions did not open")
+    }
+    func waitClosed() {
+        for _ in 0..<150 {
+            if !present("Edit project") && !confirming() {return}
+            Thread.sleep(forTimeInterval:0.1)
+        }
+        record("failure-pending");fatalError("Project action did not complete")
+    }
+    key(53)
+    let triggerRect=rect(find("Project actions for " + project))
+    let hover=CGPoint(x:triggerRect.minX-70,y:triggerRect.midY)
+    CGEvent(mouseEventSource:nil,mouseType:.mouseMoved,mouseCursorPosition:hover,mouseButton:.left)!.post(tap:.cghidEventTap)
+    Thread.sleep(forTimeInterval:1.2)
+    _ = find("Edit project");record("00-hover-card")
+    click(find("Edit project"));_ = find("Project name");key(53)
+    for edge in [-1,0,1] {openActions(edge);key(53)}
+    openActions();record("01-menu")
+    precondition(!present("Rename") && !present("Move up") && !present("New section…"))
+    click(find(present("Unpin") ? "Unpin" : "Pin"));record("02-pinned")
+    openActions();precondition(present("Unpin"));click(find(present("Unpin") ? "Unpin" : "Pin"));record("03-unpinned")
+    openActions();click(find("Edit"));record("04-edit")
+    for _ in 0..<15 {key(48)}
+    for _ in 0..<15 {key(48,shift:true)}
+    key(53);precondition(!present("Edit project"))
+    openActions();click(find("Archive chats"));record("05-archive-confirm")
+    click(find("Cancel"));precondition(!confirming())
+    openActions();click(find("Remove project"));record("06-remove-confirm")
+    key(53);precondition(!confirming())
+    openActions();key(119);key(115);key(53);record("07-keyboard")
+    openActions();click(find("Chat input"));record("08-outside")
+    precondition(!present("Edit"))
+    if option("scenario") == "project-actions-write" {
+        precondition(project == "Issue 32 fixture", "Writes require the disposable acceptance project")
+        click(find("Start new chat in " + project))
+        openActions();click(find("Edit"));
+        key(0,command:true);text("Issue 32 edited fixture")
+        click(find("Change project marker"));click(find("Dollar"))
+        let source=option("source")
+        precondition(source.contains("issues-40-29-32/project-action-fixture"), "Pass the disposable fixture source")
+        let unavailable=source+"-temporarily-unavailable"
+        try FileManager.default.moveItem(atPath:source,toPath:unavailable)
+        click(find("Save"));Thread.sleep(forTimeInterval:1)
+        let retained=present("Edit project") && present("Save")
+        try FileManager.default.moveItem(atPath:unavailable,toPath:source)
+        precondition(retained, "Failed save must preserve its editor for retry")
+        record("09-save-error")
+        click(find("Save"));waitClosed();
+        project="Issue 32 edited fixture"
+        _ = find("Project actions for " + project);record("09-saved")
+        openActions();click(find("Edit"));click(find("Remove folder"));record("10-empty-sources")
+        click(find("Save"));waitClosed();record("11-cleared-sources")
+        openActions();click(find("Reveal in Finder"));precondition(present("Edit"));record("11-disabled-reveal");key(53)
+        openActions();click(find("Archive chats"));click(find("Archive all"));waitClosed();record("12-archived")
+        openActions();click(find("Remove project"));click(find("Remove project"));waitClosed();record("13-removed")
+        precondition(!present("Project actions for " + project))
+        precondition(present("Choose project"), "Removed project remained selected in the draft")
+    }
+    print("Verified project actions hit areas, pin/unpin, editing, confirmations, keyboard and outside dismissal" + (option("scenario")=="project-actions-write" ? ", plus persisted edit, empty roots, archive and removal" : ""))
+    exit(0)
+}
 if option("scenario") == "projects" {
     func openOptions(_ label: String, edge: Int = 0) {
         key(53)

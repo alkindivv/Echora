@@ -365,6 +365,10 @@ impl WorkspaceStore {
         match item {
             SectionItem::Project(project_id) => {
                 self.update(|snapshot| {
+                    snapshot
+                        .preferences
+                        .pinned_project_ids
+                        .retain(|id| id != &project_id);
                     for projects in snapshot.preferences.section_projects.values_mut() {
                         projects.retain(|id| id != &project_id);
                     }
